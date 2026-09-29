@@ -31,7 +31,10 @@
 
 - Phase 1: user approved these defaults for gaps not covered here: owners add existing users via `POST /api/workspaces/{id}/members`; only owners upload/delete documents; conversations and agent runs are private to their creator; agent runs execute in the arq worker (202 + polling); JWT 60 min, no refresh; PyJWT + argon2-cffi; statuses as VARCHAR + CHECK; chunk/point IDs are `uuid5(document_id, chunk_index)`.
 - Phase 2 (NOT ticked): code, config, Dockerfile and compose written; ruff, ruff format, mypy --strict, and pytest (14 offline tests) pass; app verified under uvicorn (/docs 200, /api/health 503 with per-dependency report when services are down). Not yet run: `docker compose up --build`, the backend image build, and `pytest -m integration` against live postgres/redis/qdrant.
-- Blocker for Phase 2: `docker` is not found on this machine (no install under Program Files, no Docker processes, WSL not installed), although the user reports Docker Desktop is installed and running.
+- Blocker for Phase 2: `docker` is not found on this machine (no install under Program Files, no Docker processes, WSL not installed), although the user reports Docker Desktop is installed and running. User deferred Docker verification to a machine with Docker; Phase 2 stays unticked until then.
+- Phase 3 (NOT ticked): models for all 9 tables, async session factory + `get_db_session`, hand-written migration `0001` (constraint names wrapped in `op.f`), pagination helpers (`app/core/pagination.py`). Passing offline: ruff, format, mypy --strict, 34 tests incl. a drift test comparing `alembic upgrade head --sql` with model DDL (mutation-checked) and a check that every FK leads an index. Written but NOT run (need a live Postgres): 13 integration tests for upgrade/downgrade + live `compare_metadata` drift, constraints, ON DELETE behaviour, and `paginate()`. They use a separate `<db>_test` database.
+- All 9 tables kept; none dropped. `document_chunks` duplicates chunk text from Qdrant on purpose (SQL metadata tool, Qdrant rebuild, stats).
+- The backend image copies only `app/`; adding `alembic/` and migrate-before-start is Phase 11's job.
 - Pins: SQLAlchemy 2.0.54 (BUILD.md says 2.0; 2.1 exists). redis-py 5.3.1 because arq 0.28 requires redis<6.
 
 ---

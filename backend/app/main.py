@@ -10,13 +10,14 @@ from app.core.errors import register_exception_handlers
 from app.core.logging import REQUEST_ID_HEADER, RequestContextMiddleware, configure_logging
 from app.db.qdrant import create_qdrant
 from app.db.redis import create_redis
-from app.db.session import create_engine
+from app.db.session import create_engine, create_session_factory
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     app.state.engine = create_engine(settings)
+    app.state.session_factory = create_session_factory(app.state.engine)
     app.state.redis = create_redis(settings)
     app.state.qdrant = create_qdrant(settings)
     try:

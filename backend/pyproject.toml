@@ -11,6 +11,10 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "N", "S", "ASYNC", "C4", "SIM", "PT", "RUF"]
 
+[tool.ruff.lint.isort]
+# backend/alembic/ holds migrations; the import name refers to the installed package.
+known-third-party = ["alembic"]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106"]
 
