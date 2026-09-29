@@ -30,7 +30,9 @@
 **Notes / blockers:** _(Claude Code: write short notes here, e.g. "waiting for OPENAI_API_KEY", "switched X because Y")_
 
 - Phase 1: user approved these defaults for gaps not covered here: owners add existing users via `POST /api/workspaces/{id}/members`; only owners upload/delete documents; conversations and agent runs are private to their creator; agent runs execute in the arq worker (202 + polling); JWT 60 min, no refresh; PyJWT + argon2-cffi; statuses as VARCHAR + CHECK; chunk/point IDs are `uuid5(document_id, chunk_index)`.
-- Blocker for Phase 2: Docker is not installed on the dev machine (needs Docker Desktop with WSL2).
+- Phase 2 (NOT ticked): code, config, Dockerfile and compose written; ruff, ruff format, mypy --strict, and pytest (14 offline tests) pass; app verified under uvicorn (/docs 200, /api/health 503 with per-dependency report when services are down). Not yet run: `docker compose up --build`, the backend image build, and `pytest -m integration` against live postgres/redis/qdrant.
+- Blocker for Phase 2: `docker` is not found on this machine (no install under Program Files, no Docker processes, WSL not installed), although the user reports Docker Desktop is installed and running.
+- Pins: SQLAlchemy 2.0.54 (BUILD.md says 2.0; 2.1 exists). redis-py 5.3.1 because arq 0.28 requires redis<6.
 
 ---
 
