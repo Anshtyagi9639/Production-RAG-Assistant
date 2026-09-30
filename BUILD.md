@@ -36,6 +36,9 @@
 - All 9 tables kept; none dropped. `document_chunks` duplicates chunk text from Qdrant on purpose (SQL metadata tool, Qdrant rebuild, stats).
 - The backend image copies only `app/`; adding `alembic/` and migrate-before-start is Phase 11's job.
 - Pins: SQLAlchemy 2.0.54 (BUILD.md says 2.0; 2.1 exists). redis-py 5.3.1 because arq 0.28 requires redis<6.
+- Phase 9 (NOT ticked): frontend built (commit 7732716); lint, typecheck, build pass. Not verified through compose.
+- Phases 4, 5 and the indexing/search part of 6 implemented together (NOT ticked): auth + workspaces + members, activity/stats, document upload/list/detail/delete, arq worker on Redis (job id per document dedups; malformed payloads dropped), extraction/cleaning/chunking, OpenAI embedder with batch retry/backoff, Qdrant indexing with mandatory workspace filter, `/api/search` with Redis query-embedding cache. Passing offline: ruff, format, mypy --strict, 136 tests (processor transitions and failure reasons with real extraction and qdrant-client local mode, storage path safety, upload validation, JWT). Browser check against the real API (no DB): login/register show the real 500, bad token 401 redirects. Written but NOT run: 48 integration tests (need PostgreSQL; the arq test also needs Redis). Not done here: rate limiting (Phase 7), migrate-on-start (Phase 11). Real OpenAI embeddings and a Qdrant server are unverified (no key, no server).
+- Blocker for Phases 3–6 checks: no `.env` with database credentials on this machine, no Redis, no Qdrant, no OPENAI_API_KEY.
 
 ---
 

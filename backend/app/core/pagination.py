@@ -5,10 +5,13 @@ from typing import Any
 from pydantic import BaseModel, Field
 from sqlalchemy import ColumnElement, Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
 from app.core.errors import AppError
 
 MAX_PAGE_SIZE = 100
+
+SortColumn = ColumnElement[Any] | InstrumentedAttribute[Any]
 
 
 class PageParams(BaseModel):
@@ -41,8 +44,8 @@ class Page[ItemT](BaseModel):
 def apply_sort(
     statement: Select[Any],
     sort: str,
-    allowed: Mapping[str, ColumnElement[Any]],
-    tiebreaker: ColumnElement[Any],
+    allowed: Mapping[str, SortColumn],
+    tiebreaker: SortColumn,
 ) -> Select[Any]:
     """Order by a whitelisted field. `sort` is a field name, prefixed with `-` for descending.
 

@@ -1,0 +1,4 @@
+Support hours
+
+The support desk is staffed from 9:00 to 17:00 CET on weekdays.
+Urgent incidents are handled by the on-call engineer outside those hours.

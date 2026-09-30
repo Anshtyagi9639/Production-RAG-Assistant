@@ -19,6 +19,13 @@ _HTTP_ERROR_CODES = {
 }
 
 
+class UserFacingError(Exception):
+    """A failure whose message is safe to show to users (e.g. as a document's failure reason).
+
+    Subclasses must never put secrets, paths or provider responses in the message.
+    """
+
+
 class AppError(Exception):
     """An expected failure that maps to a client-facing error response."""
 

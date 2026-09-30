@@ -48,16 +48,20 @@ services:
 
   backend:
     build: ./backend
-    env_file:
+    env_file: &backend-env-file
       - path: .env
         required: false
-    environment:
+    environment: &backend-environment
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-copilot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-copilot}
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333
+      STORAGE_LOCAL_PATH: /data/uploads
+    # Uploaded files, shared with the worker (local storage backend).
+    volumes: &backend-volumes
+      - uploads:/data/uploads
     ports:
       - "8000:8000"
-    depends_on:
+    depends_on: &backend-depends-on
       postgres:
         condition: service_healthy
       redis:
@@ -74,6 +78,22 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  # Consumes document-processing jobs from Redis: extract, chunk, embed, index in Qdrant.
+  worker:
+    build: ./backend
+    command: ["arq", "app.workers.settings.WorkerSettings"]
+    env_file: *backend-env-file
+    environment: *backend-environment
+    volumes: *backend-volumes
+    depends_on: *backend-depends-on
+    healthcheck:
+      # arq writes a health-check key to Redis while the worker is running.
+      test: ["CMD", "arq", "--check", "app.workers.settings.WorkerSettings"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   frontend:
     build:
@@ -94,6 +114,7 @@ services:
       start_period: 10s
 
 volumes:
+  uploads:
   postgres_data:
   redis_data:
   qdrant_data:

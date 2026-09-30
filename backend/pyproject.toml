@@ -16,7 +16,8 @@ select = ["E", "W", "F", "I", "B", "UP", "N", "S", "ASYNC", "C4", "SIM", "PT", "
 known-third-party = ["alembic"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106"]
+# Blocking file access in async tests is fine; asserts and fixed test secrets are expected.
+"tests/**" = ["S101", "S105", "S106", "ASYNC240"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -24,9 +25,18 @@ strict = true
 plugins = ["pydantic.mypy"]
 files = ["app"]
 
+[[tool.mypy.overrides]]
+# boto3 ships without type information.
+module = ["boto3", "botocore.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "-ra --strict-markers -m 'not integration'"
 markers = ["integration: needs running postgres, redis and qdrant (run with -m integration)"]
+filterwarnings = [
+    # Tests use qdrant-client's in-process mode, where payload indexes are a no-op.
+    "ignore:Payload indexes have no effect in the local Qdrant:UserWarning",
+]

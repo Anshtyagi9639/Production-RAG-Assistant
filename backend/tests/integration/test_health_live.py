@@ -1,14 +1,14 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.core.config import Settings
 from app.main import create_app
+from tests.integration.conftest import live_settings
 
 pytestmark = pytest.mark.integration
 
 
 async def test_health_is_green_against_real_services() -> None:
-    app = create_app(Settings(environment="test"))
+    app = create_app(live_settings())
 
     async with (
         app.router.lifespan_context(app),

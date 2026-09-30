@@ -2,7 +2,7 @@
 
 A multi-tenant knowledge base for internal teams: upload documents, search them semantically, get grounded answers with citations, and run a multi-step analysis agent.
 
-> **Status: design draft (Phase 1).** This README describes the planned system. No application code exists yet. Each section will be replaced with a description of what was actually built as the corresponding phase is completed.
+> **Status: in development.** This README is still the Phase 1 design; it will be rewritten to describe what was built. Implemented so far: the FastAPI foundation, database schema and migration, auth and workspaces, document upload with the arq/Redis worker (extract → chunk → embed → Qdrant), semantic search, and the frontend. Chat and the agent are not built yet, and nothing has been verified end to end with Docker Compose. See the Progress notes in BUILD.md.
 
 ---
 
