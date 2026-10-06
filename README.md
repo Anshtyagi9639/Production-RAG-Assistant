@@ -61,13 +61,13 @@ flowchart LR
     subgraph Backend
         API --> MW[Request ID · JSON logs · CORS · error handler]
         MW --> DEP[Auth + workspace membership dependency<br/>rate limiter]
-        DEP --> R[Routes] --> S[Services] --> REPO[Repositories] --> M[ORM models]
+        DEP --> R[Routes] --> S[Services] --> REPO[Repositories] --> M[Record dataclasses]
         S --> AI[AI layer<br/>LLM · Embedder · retrieval]
         S --> AG[LangGraph agent]
         S --> ST[Storage interface]
     end
 
-    REPO --> PG[(PostgreSQL 16)]
+    REPO --> PG[(MongoDB Atlas)]
     AI --> QD[(Qdrant<br/>knowledge_chunks)]
     AI --> RD[(Redis)]
     DEP --> RD
@@ -90,20 +90,20 @@ flowchart LR
 | Frontend (Next.js) | UI only. Talks to the backend through a typed client using `NEXT_PUBLIC_API_URL`. Never sees provider keys. |
 | Backend (FastAPI) | REST API, auth, tenant isolation, validation, RAG query path. |
 | Worker (arq) | Document processing (extract → chunk → embed → index) and agent runs. Keeps slow work out of the request path. |
-| PostgreSQL | Source of truth: users, workspaces, documents, chunks, conversations, agent runs, activity. |
+| MongoDB Atlas | Source of truth: users, workspaces, documents, chunks, conversations, agent runs, activity. Cloud-hosted; nothing runs locally. |
 | Qdrant | Vector search over chunks, always filtered by `workspace_id`. |
 | Redis | arq job queue · per-user rate limits on `/chat`, `/search`, `/agent/run` · short-TTL cache for query embeddings. |
 | Storage | Uploaded files under UUID names. Local volume in development, S3-compatible bucket in production. |
 
-**Layering rule:** routes → services → repositories → models. Routes parse input and return schemas; services hold business logic and transactions; repositories hold all SQL. Pydantic schemas are separate from ORM models.
+**Layering rule:** routes → services → repositories → models. Routes parse input and return schemas; services hold business logic and transactions; repositories hold all database queries. Pydantic schemas are separate from the stored records.
 
-**Tenant isolation:** the current workspace comes from the `X-Workspace-Id` header and is verified by a single dependency that checks the user's membership. Every repository query takes the verified `workspace_id`, and the retrieval module adds a mandatory `workspace_id` filter to every Qdrant search. Tests will prove that a user cannot read, search, chat over, or delete another workspace's documents.
+**Tenant isolation:** the current workspace comes from the `X-Workspace-Id` header and is verified by a single dependency that checks the user's membership. Every repository query takes the verified `workspace_id`, and the retrieval module adds a mandatory `workspace_id` filter to every Qdrant search. Tests prove that a user cannot read, search, chat over, run the agent over, or delete another workspace's documents (offline, against MongoDB Atlas, and against the real OpenAI + Qdrant Cloud in `tests/live/`).
 
 ### Request flows
 
 **Upload.** API validates extension, magic bytes, size (`MAX_UPLOAD_MB`, default 20) and non-emptiness → stores the file under a UUID name → inserts the document as `UPLOADED` → enqueues `process_document` → returns `202`. The worker sets `PROCESSING`, indexes the file, and sets `COMPLETED`, or `FAILED` with a readable reason. The frontend polls status while processing.
 
-**Chat.** Membership + rate limit check → rewrite follow-ups into a standalone question → embed (Redis cache) → Qdrant search → if nothing passes the score threshold, return the fixed "not enough information" answer **without calling the LLM** → otherwise build a numbered context → LLM → map `[n]` citations to sources → persist the message with JSONB sources and token usage.
+**Chat.** Membership + rate limit check → rewrite follow-ups into a standalone question → embed (Redis cache) → Qdrant search → if nothing passes the score threshold, return the fixed "not enough information" answer **without calling the LLM** → otherwise build a numbered context → LLM → keep only `[n]` citations that match a passage that was sent, and return those passages as sources → save the question and answer (with sources and token usage) in one transaction.
 
 **Agent.** `POST /api/agent/run` creates an `agent_runs` row and enqueues it (`202`). The worker executes the graph and writes the step trace as it goes; the UI polls `GET /api/agent/runs/{id}` to render the timeline. Multi-step runs can exceed HTTP timeouts, so they don't run inside the request.
 
@@ -111,7 +111,10 @@ flowchart LR
 
 ## Database design
 
-PostgreSQL 16, managed by Alembic migrations only. All tables have UUID primary keys and `created_at` / `updated_at`. Status fields are `VARCHAR` with `CHECK` constraints (easier to evolve in migrations than native enums).
+MongoDB Atlas (cloud), accessed with PyMongo's native async API. The project originally used PostgreSQL 16 with Alembic; it was migrated to Atlas so that no database runs locally (see BUILD.md, *Notes*). The API contract did not change.
+
+- **IDs:** every `_id` is a UUID stored as BSON binary subtype 4, so the API still returns the same UUID strings. All documents have `created_at` / `updated_at`.
+- **Schema:** `app/db/mongo_schema.py` declares the nine collections with `$jsonSchema` validators (they mirror the old `CHECK` constraints: enum values for statuses and roles, lowercase emails, `size_bytes >= 1`, `chunk_index >= 0`) and their indexes. `ensure_schema` is idempotent and runs at API and worker startup, and from the seed script; a missing collection or index is created, and existing data is never touched.
 
 ```mermaid
 erDiagram
@@ -128,26 +131,29 @@ erDiagram
     users ||--o{ activity_logs : "performs"
 ```
 
-| Table | Key columns | FKs (`ON DELETE`) | Constraints & indexes |
-|---|---|---|---|
-| `users` | email, password_hash, full_name, is_active | — | `UNIQUE(email)` (stored lowercased) |
-| `workspaces` | name | — | — |
-| `workspace_members` | workspace_id, user_id, role | workspace `CASCADE`, user `CASCADE` | `UNIQUE(workspace_id, user_id)`; `CHECK role IN (owner, member)`; index on `user_id` |
-| `documents` | workspace_id, uploaded_by_id, filename, storage_key, content_type, size_bytes, status, error_message, page_count, chunk_count, processed_at | workspace `CASCADE`, uploader `SET NULL` | `CHECK status IN (UPLOADED, PROCESSING, COMPLETED, FAILED)`; index `(workspace_id, status, created_at)`; index on `uploaded_by_id` |
-| `document_chunks` | document_id, workspace_id, chunk_index, page, text, token_count | document `CASCADE`, workspace `CASCADE` | `UNIQUE(document_id, chunk_index)`; index on `workspace_id` |
-| `conversations` | workspace_id, user_id, title | workspace `CASCADE`, user `CASCADE` | index `(workspace_id, user_id, updated_at)` |
-| `messages` | conversation_id, role, content, sources `JSONB`, insufficient_context, prompt_tokens, completion_tokens | conversation `CASCADE` | `CHECK role IN (user, assistant)`; index `(conversation_id, created_at)` |
-| `agent_runs` | workspace_id, user_id, request, status, classification, trace `JSONB`, final_answer, sources `JSONB`, is_partial, prompt_tokens, completion_tokens, error, started_at, finished_at | workspace `CASCADE`, user `SET NULL` | `CHECK status IN (QUEUED, RUNNING, COMPLETED, FAILED)`; index `(workspace_id, created_at)`; index on `user_id` |
-| `activity_logs` | workspace_id, user_id, action, entity_type, entity_id, details `JSONB` | workspace `CASCADE`, user `SET NULL` | index `(workspace_id, created_at)`; index on `user_id` |
+| Collection | Key fields | Validators & indexes |
+|---|---|---|
+| `users` | email, password_hash, full_name, is_active | email lowercase; unique `uq_users_email` |
+| `workspaces` | name | — |
+| `workspace_members` | workspace_id, user_id, role | role in (owner, member); unique `(workspace_id, user_id)`; index on `user_id` |
+| `documents` | workspace_id, uploaded_by_id, filename, storage_key, content_type, size_bytes, status, error_message, page_count, chunk_count, processed_at | status in (UPLOADED, PROCESSING, COMPLETED, FAILED); `(workspace_id, status, created_at)`; `(workspace_id, created_at)`; unique `storage_key` |
+| `document_chunks` | document_id, workspace_id, chunk_index, page, text, token_count | unique `(document_id, chunk_index)`; index on `workspace_id` |
+| `conversations` | workspace_id, user_id, title | `(workspace_id, user_id, updated_at)` |
+| `messages` | conversation_id, workspace_id, role, content, sources, insufficient_context, prompt_tokens, completion_tokens | role in (user, assistant); `(conversation_id, created_at)`; index on `workspace_id` |
+| `agent_runs` | workspace_id, user_id, request, status, classification, trace, final_answer, sources, is_partial, tokens, error, started_at, finished_at | status in (QUEUED, RUNNING, COMPLETED, FAILED); `(workspace_id, created_at)` |
+| `activity_logs` | workspace_id, user_id, action, entity_type, entity_id, details | `(workspace_id, created_at)` |
 
-All nine tables from the brief are kept. `document_chunks` duplicates chunk text that also lives in the Qdrant payload, deliberately: it lets the agent's document-metadata tool query in SQL, lets Qdrant be rebuilt from Postgres, and keeps chunk counts accurate for stats.
+`document_chunks` duplicates chunk text that also lives in the Qdrant payload, deliberately: it lets Qdrant be rebuilt from the database and keeps chunk counts accurate for stats. `messages` carries a denormalized `workspace_id` so token totals can be computed per workspace without a join.
 
-**SQL concepts the code will use**
+**How the relational guarantees are kept**
 
-- **JOINs:** membership checks (`workspace_members` ⋈ `workspaces`); dashboard stats.
-- **Aggregation:** document counts `GROUP BY status`; `SUM` of prompt + completion tokens across `messages` and `agent_runs`.
-- **Pagination and sorting:** documents, conversations, and activity (`limit`/`offset` with whitelisted sort columns).
-- **Transactions:** register creates user + workspace + owner membership atomically; document delete removes the row and chunks in one transaction, then deletes the file and Qdrant points.
+- **Transactions:** registration (user + workspace + owner membership + activity), workspace creation, adding a member, upload, delete, and the worker's `complete` / `fail` transitions each run in one multi-document transaction (`Mongo.transaction`). Any error rolls the whole unit back.
+- **Cascades:** there are no foreign keys; deleting a document removes its chunks and records the activity in the same transaction, then deletes the Qdrant points and the stored file.
+- **Uniqueness:** unique indexes; a `DuplicateKeyError` is mapped to the same 409 errors as before.
+- **Aggregation:** document counts use `$group` by status; token totals use `$group` sums over `messages` and `agent_runs`.
+- **Pagination and sorting:** `count_documents` + `find().sort().skip().limit()`, with whitelisted sort fields and `_id` as a tie-breaker.
+
+Development data: `backend/scripts/seed_mongodb.py` (idempotent upserts; see `backend/seed_data/README.md`).
 
 ---
 
@@ -189,10 +195,12 @@ flowchart LR
     LLM --> CIT[Parse 1, 2 citations<br/>→ map to real sources]
 ```
 
-- Retrieval is a small in-house module rather than a LangChain vector-store wrapper, so the `workspace_id` filter cannot be bypassed.
+- Retrieval is a small in-house module (`KnowledgeRetriever`) rather than a LangChain vector-store wrapper, so the `workspace_id` filter cannot be bypassed. Search, chat and the agent all use it. Qdrant calls retry transient failures (network errors, 5xx, 429) up to 3 times with backoff; a cloud load balancer can drop an idle connection.
 - **Sources** returned with every answer: document id, filename, page, chunk index, score. Citations that don't match a context chunk are dropped.
-- **Prompt-injection defense:** document text is placed in clearly delimited blocks and the system prompt tells the model to treat it as data and ignore any instructions it contains.
-- Tunables: `RETRIEVAL_TOP_K` (6), `RETRIEVAL_SCORE_THRESHOLD` (calibrated against `text-embedding-3-small` in Phase 6), `CONTEXT_TOKEN_BUDGET` (6000, above 6 × 800).
+- **Prompt-injection defense:** document text is HTML-escaped and placed in `<context><source index=…>` blocks in the user message (never the system message), so a document cannot close the block or fake a system section. The system prompt ranks its own rules first, tells the model to treat the passages as data and ignore instructions inside them, and forbids revealing the prompt, configuration or credentials. Verified against the real model in `tests/live/`.
+- **Partial coverage:** if the passages answer only part of a question, the model answers that part and says what the knowledge base does not cover.
+- **Conversations** are private to the user who created them (another member, or another workspace, gets `404`). Follow-ups use the last `CHAT_HISTORY_MESSAGES` messages (default 6) only to rewrite the question.
+- Tunables: `RETRIEVAL_TOP_K` (6), `RETRIEVAL_SCORE_THRESHOLD` (0.3), `CONTEXT_TOKEN_BUDGET` (6000, above 6 × 800), `OPENAI_CHAT_MODEL` (`gpt-4o-mini`, temperature 0, `LLM_TIMEOUT_SECONDS` 60, `LLM_MAX_RETRIES` 2). `/api/chat`, `/api/search` and `/api/agent/run` are limited to `RATE_LIMIT_REQUESTS` per `RATE_LIMIT_WINDOW_SECONDS` per user (Redis; `429` with `Retry-After`).
 
 ---
 
@@ -216,13 +224,13 @@ flowchart TD
     X[any node error] --> ER[error node: status FAILED] --> E
 ```
 
-**Tools (real ones only):**
-- **Knowledge retrieval:** the same workspace-filtered retrieval used by chat.
-- **Document metadata:** which documents mention X; groups findings by document.
+**Tools (real ones only):** both are bound to the run's workspace when they are created, so the model never chooses a workspace, and the graph (not the model) decides when they run. There is no open-ended tool.
+- **Knowledge retrieval:** the same workspace-filtered retrieval used by search and chat.
+- **Document metadata:** which documents the findings come from: passages grouped by document, with details read from MongoDB (also filtered to the workspace).
 
-**Persistence:** each run is stored in `agent_runs` with status, a per-node trace with timings, output, sources, token usage, and error.
+**Persistence:** each run is stored in `agent_runs` with status (`QUEUED → RUNNING → COMPLETED/FAILED`), a per-node trace with timings and a short summary (written as each node finishes, so the UI shows progress), output, sources, token usage, and a user-safe error. Runs are private to the user who started them. Activity: `agent.run_started`, `agent.run_completed`, `agent.run_failed`. Validation is checked twice: deterministically (the answer must cite at least one passage that was sent) and by the model (every claim supported).
 
-**LangSmith:** enabled with `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`. Runs are tagged with `workspace_id` and run type. With tracing off, behavior is identical.
+**LangSmith:** set `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY` and optionally `LANGSMITH_PROJECT` (default `copilot`) in `.env`, restart the worker, then open the project in LangSmith: each run appears as `knowledge_agent`, tagged `agent` and `workspace:<id>`, with `agent_run_id` in its metadata. With tracing off, behavior is identical.
 
 ---
 
@@ -241,13 +249,13 @@ All routes are under `/api`. Swagger UI at `/docs`. Tenant routes require `Autho
 | GET | `/api/documents` | Paginated, sortable, filter by status |
 | GET / DELETE | `/api/documents/{id}` | Delete (owner only) removes file, chunks, Qdrant points. `204` |
 | POST | `/api/search` | Ranked chunks with snippet and score. Rate-limited |
-| POST | `/api/chat` | Create/continue a conversation; answer + sources. Rate-limited |
-| GET | `/api/conversations`, `/api/conversations/{id}` | Paginated |
-| POST | `/api/agent/run` | `202`, enqueues the run. Rate-limited |
-| GET | `/api/agent/runs/{id}` | Includes step trace |
+| POST | `/api/chat` | `{message, conversation_id?}` → `{conversation_id, message}`; the message has `content` with `[n]` citations, `sources[]` (index, document_id, filename, page, chunk_index, score, snippet) and `insufficient_context`. Creates the conversation if `conversation_id` is omitted. Rate-limited |
+| GET | `/api/conversations`, `/api/conversations/{id}` | Your conversations, most recent first (paginated); one conversation with its messages in order |
+| POST | `/api/agent/run` | `{request}` → `202` with the `QUEUED` run; executed by the worker. Rate-limited |
+| GET | `/api/agent/runs/{id}` | Status, classification, step trace (node, status, started_at, duration_ms, summary), final_answer, sources, is_partial, tokens, error |
 | GET | `/api/activity` | Paginated |
 | GET | `/api/stats` | Real dashboard numbers |
-| GET | `/api/health` | Postgres, Redis, Qdrant reported separately |
+| GET | `/api/health` | MongoDB (real `ping`), Redis, Qdrant reported separately |
 
 **Errors** always use one shape, with no stack traces:
 
@@ -265,8 +273,8 @@ Status codes: `201, 202, 204, 400, 401, 403/404, 413, 415, 422, 429` (with `Retr
 
 | Area | Choice |
 |---|---|
-| Backend | Python 3.12, FastAPI, SQLAlchemy 2.0 async (asyncpg), Alembic, Pydantic v2, pydantic-settings |
-| Database | PostgreSQL 16 |
+| Backend | Python 3.12, FastAPI, PyMongo async, Pydantic v2, pydantic-settings |
+| Database | MongoDB Atlas (cloud) |
 | Vectors | Qdrant |
 | Jobs / cache / rate limits | arq on Redis |
 | AI | OpenAI via langchain-openai, LangChain text splitters, LangGraph, LangSmith |
@@ -274,7 +282,7 @@ Status codes: `201, 202, 204, 400, 401, 403/404, 413, 415, 422, 429` (with `Retr
 | Frontend | Next.js App Router, TypeScript (strict), Tailwind, shadcn/ui, TanStack Query |
 | Tests | pytest, pytest-asyncio, httpx AsyncClient; ESLint, `tsc --noEmit`, `next build` |
 | Lint | ruff, mypy; ESLint, Prettier |
-| Local run | Docker Compose |
+| Local run | `uvicorn` + `npm run dev` (Docker Compose optional; no database container) |
 | CI | GitHub Actions |
 
 ---
@@ -291,10 +299,10 @@ Status codes: `201, 202, 204, 400, 401, 403/404, 413, 415, 422, 429` (with `Retr
 │   ├── app/
 │   │   ├── api/         routes/ and dependencies.py (auth + workspace isolation)
 │   │   ├── core/        config, security, logging, errors, rate_limit
-│   │   ├── db/          async session and declarative base
-│   │   ├── models/      SQLAlchemy ORM models
+│   │   ├── db/          MongoDB client, transactions, collections + indexes
+│   │   ├── models/      record dataclasses and enums
 │   │   ├── schemas/     Pydantic request/response models
-│   │   ├── repositories/ all SQL
+│   │   ├── repositories/ all database queries
 │   │   ├── services/    business logic and transactions
 │   │   ├── ai/          LLM, embeddings, prompts, retrieval
 │   │   ├── rag/         extraction, chunking, indexing, chain
@@ -302,7 +310,8 @@ Status codes: `201, 202, 204, 400, 401, 403/404, 413, 415, 422, 429` (with `Retr
 │   │   ├── workers/     arq tasks and settings
 │   │   └── main.py      app factory
 │   ├── tests/           unit/ · api/ · integration/ · fixtures/
-│   └── alembic/ · pyproject.toml · requirements*.txt · Dockerfile
+│   ├── scripts/ · seed_data/   Atlas seed script and JSON fixtures
+│   └── pyproject.toml · requirements*.txt · Dockerfile
 └── frontend/            Next.js app · Dockerfile
 ```
 
@@ -310,7 +319,7 @@ Status codes: `201, 202, 204, 400, 401, 403/404, 413, 415, 422, 429` (with `Retr
 
 ## Deployment plan
 
-**Local:** `docker compose up --build` starts frontend, backend, worker, Postgres, Redis, and Qdrant. Migrations run automatically before the backend starts.
+**Local:** set `MONGODB_URI` / `MONGODB_DATABASE` in `.env`, then `python -m uvicorn app.main:app` in `backend/` and `npm run dev` in `frontend/`. The collections and indexes are created on startup. Document processing additionally needs Redis (`REDIS_URL`), Qdrant (`QDRANT_URL`) and `OPENAI_API_KEY`, plus the worker: `python -m arq app.workers.settings.WorkerSettings`. Optionally, `docker compose up --build` runs Redis, Qdrant, backend, worker and frontend; the database is still Atlas.
 
 **Production:**
 
@@ -318,15 +327,15 @@ Status codes: `201, 202, 204, 400, 401, 403/404, 413, 415, 422, 429` (with `Retr
 |---|---|
 | Frontend | Vercel |
 | Backend API + arq worker | Render (Railway or Fly.io as alternatives) |
-| PostgreSQL | Neon |
+| Database | MongoDB Atlas |
 | Redis | Upstash |
 | Vectors | Qdrant Cloud (free tier) |
 | File storage | S3-compatible (Cloudflare R2) |
 
-Migrations run as a release command before the new backend version serves traffic. All configuration comes from environment variables; the full list will live in `.env.example` and `docs/deployment.md`. Main groups:
+There are no migrations: collections, validators and indexes are ensured idempotently at startup. All configuration comes from environment variables; the full list will live in `.env.example` and `docs/deployment.md`. Main groups:
 
 - **App:** `ENVIRONMENT`, `ALLOWED_ORIGINS`, `JWT_SECRET_KEY`, `JWT_EXPIRE_MINUTES`, `MAX_UPLOAD_MB`
-- **Data:** `DATABASE_URL`, `REDIS_URL`, `QDRANT_URL`, `QDRANT_API_KEY`
+- **Data:** `MONGODB_URI`, `MONGODB_DATABASE`, `REDIS_URL`, `QDRANT_URL`, `QDRANT_API_KEY`
 - **Storage:** `STORAGE_BACKEND`, `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
 - **AI:** `OPENAI_API_KEY`, `OPENAI_CHAT_MODEL`, `OPENAI_EMBEDDING_MODEL`, `RETRIEVAL_TOP_K`, `RETRIEVAL_SCORE_THRESHOLD`, `CONTEXT_TOKEN_BUDGET`
 - **Observability:** `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`, `LOG_LEVEL`
