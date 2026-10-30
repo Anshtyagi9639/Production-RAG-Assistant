@@ -1,10 +1,9 @@
 fastapi==0.141.1
+# Imported directly (middleware, exceptions); pinned to the version fastapi resolves to.
+starlette==1.7.0
 uvicorn[standard]==0.54.0
 pydantic==2.13.5
 pydantic-settings==2.15.0
-sqlalchemy[asyncio]==2.0.54
-asyncpg==0.31.0
-alembic==1.20.0
 # arq (added with the worker) requires redis<6
 redis[hiredis]==5.3.1
 qdrant-client==1.19.1
@@ -12,10 +11,23 @@ python-multipart==0.0.32
 email-validator==2.3.0
 argon2-cffi==25.1.0
 PyJWT==2.15.1
+# MongoDB Atlas (official driver; native async API)
+pymongo==4.18.2
 arq==0.28.0
 pypdf==6.19.0
 python-docx==1.2.0
 langchain-text-splitters==1.1.2
 langchain-openai==1.6.6
+# Imported directly (messages, runnable config, provider errors); pinned to the versions
+# langchain-openai resolves to.
+langchain-core==1.6.6
+openai==3.13.0
+# Imported directly (app/ai/http.py: the OpenAI SDK's HTTP client and its CA bundle).
+httpx2==2.13.1
+certifi==2026.7.22
+# The agent graph (BUILD.md section 7).
+langgraph==1.2.11
 tiktoken==0.14.0
 boto3==1.43.105
+# Imported directly (S3 error handling); pinned to the version boto3 resolves to.
+botocore==1.43.105

@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Mapping
 from http import HTTPStatus
 from typing import Any, cast
@@ -5,6 +6,7 @@ from typing import Any, cast
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pymongo.errors import ConnectionFailure, OperationFailure
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 _HTTP_ERROR_CODES = {
@@ -17,6 +19,8 @@ _HTTP_ERROR_CODES = {
     415: "unsupported_media_type",
     429: "rate_limited",
 }
+
+logger = logging.getLogger(__name__)
 
 
 class UserFacingError(Exception):
@@ -85,7 +89,58 @@ async def _validation_error_handler(_: Request, exc: Exception) -> JSONResponse:
     return error_response(422, "validation_error", "Request validation failed.", details)
 
 
+def is_database_auth_failure(exc: BaseException) -> bool:
+    """MongoDB rejected the application's database user name or password.
+
+    18 is AuthenticationFailed; Atlas reports the same failure as 8000 ("bad auth").
+    """
+    if not isinstance(exc, OperationFailure):
+        return False
+    return exc.code == 18 or (exc.code == 8000 and "bad auth" in str(exc).lower())
+
+
+def _service_unavailable() -> JSONResponse:
+    return error_response(
+        503,
+        "database_unavailable",
+        "The service is temporarily unavailable. Please try again in a few minutes.",
+    )
+
+
+async def _database_auth_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Database credential rejected: a server configuration fault, not the client's, so 503.
+
+    Any other OperationFailure is not handled here and is re-raised (it becomes a 500).
+    """
+    if not is_database_auth_failure(exc):
+        raise exc
+    logger.error(
+        "database_auth_failed",
+        extra={
+            "path": request.url.path,
+            "error_code": cast(OperationFailure, exc).code,
+            "hint": (
+                "MongoDB rejected the database user in MONGODB_URI. Check Atlas > Security > "
+                "Database Access (not Identity & Access > Users) and the password in .env."
+            ),
+        },
+    )
+    return _service_unavailable()
+
+
+async def _database_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    # MongoDB unreachable (server selection timeout, network error, TLS rejected): an outage of
+    # a dependency, not a bug, so 503 and retryable. Only the exception type is logged: the
+    # driver's message lists cluster host names. /api/health reports which dependency is down.
+    logger.warning(
+        "database_unavailable", extra={"path": request.url.path, "error": type(exc).__name__}
+    )
+    return _service_unavailable()
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AppError, _app_error_handler)
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(RequestValidationError, _validation_error_handler)
+    app.add_exception_handler(ConnectionFailure, _database_unavailable_handler)
+    app.add_exception_handler(OperationFailure, _database_auth_handler)

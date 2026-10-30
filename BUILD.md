@@ -14,7 +14,7 @@
 - [ ] Phase 4 — Auth & workspaces
 - [ ] Phase 5 — Documents & background processing
 - [ ] Phase 6 — RAG indexing & semantic search
-- [ ] Phase 7 — Grounded AI chat
+- [x] Phase 7 — Grounded AI chat
 - [ ] Phase 8 — LangGraph agent + LangSmith
 - [ ] Phase 9 — Frontend
 - [ ] Phase 10 — Testing hardening
@@ -39,6 +39,13 @@
 - Phase 9 (NOT ticked): frontend built (commit 7732716); lint, typecheck, build pass. Not verified through compose.
 - Phases 4, 5 and the indexing/search part of 6 implemented together (NOT ticked): auth + workspaces + members, activity/stats, document upload/list/detail/delete, arq worker on Redis (job id per document dedups; malformed payloads dropped), extraction/cleaning/chunking, OpenAI embedder with batch retry/backoff, Qdrant indexing with mandatory workspace filter, `/api/search` with Redis query-embedding cache. Passing offline: ruff, format, mypy --strict, 136 tests (processor transitions and failure reasons with real extraction and qdrant-client local mode, storage path safety, upload validation, JWT). Browser check against the real API (no DB): login/register show the real 500, bad token 401 redirects. Written but NOT run: 48 integration tests (need PostgreSQL; the arq test also needs Redis). Not done here: rate limiting (Phase 7), migrate-on-start (Phase 11). Real OpenAI embeddings and a Qdrant server are unverified (no key, no server).
 - Blocker for Phases 3–6 checks: no `.env` with database credentials on this machine, no Redis, no Qdrant, no OPENAI_API_KEY.
+- ARCHITECTURE CHANGE (user decision, 2026-10-01): PostgreSQL + SQLAlchemy + Alembic replaced by **MongoDB Atlas** (cloud) via PyMongo async, because the user does not want any database installed or run locally (no Docker, no local PostgreSQL/MongoDB). Config: `MONGODB_URI`, `MONGODB_DATABASE` (`DATABASE_URL` and `POSTGRES_*` are no longer read). The nine tables became nine collections with `$jsonSchema` validators (ex-CHECK constraints) and unique/compound indexes, created idempotently by `ensure_schema` at API/worker startup (replaces "migrations only"). UUID `_id`s (BSON subtype 4) keep the API contract unchanged. Multi-document transactions keep registration, workspace/member creation, upload, delete and the worker's complete/fail atomic; document delete removes chunks explicitly (no FK cascades). `/api/health` reports `mongodb` via a real `ping`. Redis and Qdrant unchanged. The Phase 3 notes above describe the superseded PostgreSQL work. Verified 2026-10-01 against Atlas (MongoDB 8.0.34): ruff, format, mypy (93 files), 149 offline tests, 41 integration tests on the separate `copilot_test` database, backend + frontend running with browser register/login/dashboard/knowledge/activity. Not verified: Redis, Qdrant server, OpenAI (not configured), so upload processing, search, chat and agent are blocked; the seed script is blocked until `SEED_ADMIN_PASSWORD` / `SEED_MEMBER_PASSWORD` are set. No phase ticked because of this change.
+- Cloud services verified 2026-10-01 (no Docker, nothing local): MongoDB Atlas, Upstash Redis (`rediss://`), Qdrant Cloud (API key), OpenAI `text-embedding-3-small`. Real flow passed over HTTP and in Edge at 1440×900 and 390×844: register → login → upload → arq queue → worker → extraction/chunking → embeddings → Qdrant upsert → MongoDB COMPLETED → semantic search with sources, workspace isolation, delete removes chunks and vectors. 194 backend tests pass (43 integration against the cloud services). Seed (`--index-vectors`) runs idempotently; seed accounts moved from `@copilot.local` (rejected by `EmailStr` as a special-use domain, so they could not log in) to `@copilot.example.com`.
+- Phase 7 (TICKED, 2026-10-01): `LLM` interface (`OpenAIChatLLM` via langchain-openai, temperature 0, timeout/retries; `FakeLLM` in tests), grounding prompt with escaped `<context>` blocks and injection rules, empty path with no LLM call, citations checked against the passages sent, conversations/messages in MongoDB (private to their creator), follow-up rewrite from history, Redis fixed-window rate limits (`429` + `Retry-After`) on chat/search/agent, token usage per message. Done-when proven by `tests/integration/test_chat_api.py` (empty path makes zero LLM calls; sources equal the passages sent). Also verified on the real services (`pytest -m live`) and in Edge at 1440×900 and 390×844.
+- Phase 8 (NOT ticked): graph from section 7 (`app/agents/`), workspace-bound tools (knowledge retrieval, document metadata), runs executed by the arq worker (`run_agent`), per-node trace written as nodes finish, `agent.run_*` activity. Offline tests cover routing, the loop limit (1 + 2 rounds), validation failure → one revision → partial, and the error path; a real run works through Upstash + worker + OpenAI + Qdrant Cloud and in the browser. Blocker: LangSmith export is wired (`LANGSMITH_*` → `app/core/tracing.py`, runs tagged with workspace and run type) but unverified, because no `LANGSMITH_API_KEY` is configured. The graph node is named `final` (LangGraph forbids a node named like the `final_answer` state key); the trace records it as `final_answer`.
+- Found by the real-cloud tests and fixed: a single transient Qdrant Cloud error (idle connection dropped) permanently FAILED an upload, so Qdrant calls now retry transient errors (3 attempts, backoff, never on 4xx); the model sometimes returns the agent's `analysis` as an object, now flattened instead of failing the run; the Assistant didn't show a follow-up answer sent within 10 s of the previous one (stale `fetchQuery`); the app had no favicon (console 404). `CONTEXT_TOKEN_BUDGET` default aligned with the design (6000).
+- Windows: arq's Ctrl+C handling is not verified on Windows (arq can't install loop signal handlers there); deployment targets Linux, where arq handles SIGINT/SIGTERM. Hard-stopping the worker is safe: PROCESSING documents and RUNNING agent runs are re-claimed when the job is retried.
+- TEMPORARY (local dev): the API imports arq lazily (`create_arq_job_queue` in `app/services/queue.py`) so it can start where arq isn't installed. Then there is no job queue: uploads return 503 `processing_unavailable` and ARQ/Redis background processing is unavailable. arq stays in requirements.txt and the worker is unchanged. Restore the hard dependency before enabling Redis-backed processing.
 
 ---
 
@@ -65,8 +72,8 @@ Do not re-debate these. If one is genuinely broken, write the reason in Notes, t
 
 | Area | Decision |
 |---|---|
-| Backend | Python 3.12, FastAPI, SQLAlchemy 2.0 async (`asyncpg`), Alembic, Pydantic v2 + `pydantic-settings` |
-| Database | PostgreSQL 16 |
+| Backend | Python 3.12, FastAPI, PyMongo async (`AsyncMongoClient`), Pydantic v2 + `pydantic-settings` |
+| Database | MongoDB Atlas (cloud; was PostgreSQL 16 — see Notes) |
 | Vectors | Qdrant, collection `knowledge_chunks`, cosine distance, payload indexes on `workspace_id` and `document_id` |
 | Background jobs | `arq` worker on Redis |
 | Redis | job queue · per-user rate limiting on `/chat`, `/search`, `/agent/run` · short-TTL cache for query embeddings |
@@ -78,7 +85,7 @@ Do not re-debate these. If one is genuinely broken, write the reason in Notes, t
 | Frontend | Next.js App Router, TypeScript strict, Tailwind, shadcn/ui, TanStack Query |
 | Tests | pytest, pytest-asyncio, httpx `AsyncClient`; frontend: ESLint, `tsc --noEmit`, `next build` |
 | Lint | ruff (lint + format), mypy on `app/`; ESLint + Prettier |
-| Local run | `docker compose up --build` → frontend, backend, worker, postgres, redis, qdrant |
+| Local run | `uvicorn` + `npm run dev` against Atlas; `docker compose up --build` optional (frontend, backend, worker, redis, qdrant — no database container) |
 | CI | `.github/workflows/ci.yml` |
 
 ---
@@ -88,8 +95,8 @@ Do not re-debate these. If one is genuinely broken, write the reason in Notes, t
 1. **Workspace isolation.** Every tenant query filters by `workspace_id` from the user's verified membership. Every Qdrant search has a `workspace_id` filter. Tests must prove User A cannot read, search, chat over, or delete User B's documents.
 2. **Secrets.** Nothing hardcoded. All config comes from env via `app/core/config.py`. Keep `.env.example` complete. `.env` is git-ignored. The frontend never sees `OPENAI_API_KEY`.
 3. **No hallucination.** If no chunk passes the similarity threshold, answer "not enough information in the knowledge base" **without calling the LLM**. Every answer returns sources: document id, filename, page, chunk index, score.
-4. **Layering.** routes → services → repositories → models. No SQL or business logic in routes. Pydantic schemas are separate from ORM models.
-5. **Migrations only.** Alembic for all schema changes. No `create_all` outside tests.
+4. **Layering.** routes → services → repositories → models. No database queries or business logic in routes. Pydantic schemas are separate from the stored records.
+5. **Controlled schema.** All collections, validators and indexes are declared in `app/db/mongo_schema.py` and applied only by the idempotent `ensure_schema` (startup, seed, tests). (Was: Alembic migrations — see Notes.)
 6. **Offline tests.** Fake LLM and fake embedder behind interfaces, so all tests and CI run without an OpenAI key. The real-API check is `scripts/smoke_openai.py`.
 7. **Meaningful tests.** Assert on bodies, DB state, Qdrant payloads, and status transitions — never on the status code alone.
 8. **One error shape:** `{"error": {"code": str, "message": str, "details": optional}}`. No stack traces leak to clients.
@@ -193,7 +200,7 @@ Any node error → error node → status FAILED → END
 | GET | /api/agent/runs/{id} | includes step trace |
 | GET | /api/activity | paginated |
 | GET | /api/stats | real dashboard numbers |
-| GET | /api/health | postgres, redis, qdrant reported separately |
+| GET | /api/health | mongodb, redis, qdrant reported separately |
 
 - Current workspace comes from the `X-Workspace-Id` header and is checked by one dependency. That dependency is the single tenant-isolation choke point.
 - Use correct status codes (201, 202, 204, 400, 401, 403/404, 413, 415, 422, 429 with `Retry-After`).
@@ -224,7 +231,7 @@ Any node error → error node → status FAILED → END
 │   │   ├── workers/ tasks.py · settings.py
 │   │   └── main.py
 │   ├── tests/ unit/ · api/ · integration/ · fixtures/
-│   ├── alembic/ · alembic.ini · pyproject.toml · requirements.txt · requirements-dev.txt · Dockerfile
+│   ├── scripts/seed_mongodb.py · seed_data/ · pyproject.toml · requirements.txt · requirements-dev.txt · Dockerfile
 └── frontend/  (Next.js app, Dockerfile)
 ```
 

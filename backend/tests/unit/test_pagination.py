@@ -1,19 +1,10 @@
-from typing import Any
-
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import Select, select
-from sqlalchemy.dialects import postgresql
 
 from app.core.errors import AppError
-from app.core.pagination import Page, PageParams, apply_sort, count_statement
-from app.models import Document
+from app.core.pagination import Page, PageParams, sort_spec
 
-ALLOWED_SORTS = {"created_at": Document.created_at, "filename": Document.filename}
-
-
-def _sql(statement: Select[Any]) -> str:
-    return " ".join(str(statement.compile(dialect=postgresql.dialect())).split())
+ALLOWED = {"created_at": "created_at", "filename": "filename"}
 
 
 @pytest.mark.parametrize(("page", "page_size", "offset"), [(1, 20, 0), (2, 20, 20), (3, 7, 14)])
@@ -36,32 +27,18 @@ def test_page_count_rounds_up(total: int, pages: int) -> None:
     assert page.items == ["a"]
 
 
-def test_descending_sort_adds_primary_key_tiebreaker() -> None:
-    statement = apply_sort(select(Document), "-created_at", ALLOWED_SORTS, Document.id)
-
-    assert _sql(statement).endswith("ORDER BY documents.created_at DESC, documents.id DESC")
+def test_descending_sort_adds_an_id_tiebreaker() -> None:
+    assert sort_spec("-created_at", ALLOWED) == [("created_at", -1), ("_id", -1)]
 
 
 def test_ascending_sort() -> None:
-    statement = apply_sort(select(Document), "filename", ALLOWED_SORTS, Document.id)
-
-    assert _sql(statement).endswith("ORDER BY documents.filename ASC, documents.id ASC")
+    assert sort_spec("filename", ALLOWED) == [("filename", 1), ("_id", 1)]
 
 
 def test_unknown_sort_field_is_rejected_with_the_allowed_fields() -> None:
     with pytest.raises(AppError) as exc_info:
-        apply_sort(select(Document), "-password_hash", ALLOWED_SORTS, Document.id)
+        sort_spec("-password_hash", ALLOWED)
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.code == "invalid_sort"
     assert exc_info.value.details == {"allowed": ["created_at", "filename"]}
-
-
-def test_count_statement_keeps_filters_and_drops_ordering() -> None:
-    statement = select(Document).where(Document.status == "COMPLETED").order_by(Document.created_at)
-
-    sql = _sql(count_statement(statement))
-
-    assert sql.startswith("SELECT count(*) AS count_1 FROM (SELECT")
-    assert "WHERE documents.status = %(status_1)s" in sql
-    assert "ORDER BY" not in sql

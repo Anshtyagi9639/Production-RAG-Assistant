@@ -1,22 +1,26 @@
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import Awaitable, Callable
 from typing import Annotated
 
 from fastapi import Depends, Header, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.ai.retrieval import KnowledgeRetriever
 from app.core.config import Settings
 from app.core.errors import AppError
 from app.core.pagination import MAX_PAGE_SIZE, PageParams
+from app.core.rate_limit import RateLimiter
 from app.core.security import InvalidTokenError, decode_access_token
+from app.db.mongo import Mongo
 from app.models import User
 from app.models.enums import WorkspaceRole
 from app.rag.indexing import VectorIndex
 from app.repositories.users import UserRepository
 from app.repositories.workspaces import Membership, WorkspaceRepository
+from app.services.agent import AgentService
+from app.services.chat import ChatService
 from app.services.documents import DocumentService
-from app.services.health import HealthService, postgres_check, qdrant_check, redis_check
+from app.services.health import HealthService, mongodb_check, qdrant_check, redis_check
 from app.services.search import SearchService
 
 _bearer = HTTPBearer(auto_error=False)
@@ -28,19 +32,18 @@ def get_app_settings(request: Request) -> Settings:
     return settings
 
 
-async def get_db_session(request: Request) -> AsyncIterator[AsyncSession]:
-    """One session per request. Services commit; anything uncommitted is rolled back on close."""
-    session_factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
-    async with session_factory() as session:
-        yield session
+def get_mongo(request: Request) -> Mongo:
+    """The process-wide MongoDB client and database, created in the app lifespan."""
+    mongo: Mongo = request.app.state.mongo
+    return mongo
 
 
 SettingsDep = Annotated[Settings, Depends(get_app_settings)]
-SessionDep = Annotated[AsyncSession, Depends(get_db_session)]
+MongoDep = Annotated[Mongo, Depends(get_mongo)]
 
 
 async def get_current_user(
-    session: SessionDep,
+    mongo: MongoDep,
     settings: SettingsDep,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
 ) -> User:
@@ -57,7 +60,7 @@ async def get_current_user(
             "Your session is invalid or has expired. Sign in again.",
             headers=_UNAUTHENTICATED_HEADERS,
         ) from exc
-    user = await UserRepository(session).get(user_id)
+    user = await UserRepository(mongo.db).get(user_id)
     if user is None or not user.is_active:
         raise AppError(
             401,
@@ -73,7 +76,7 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 
 async def get_workspace_membership(
     user: CurrentUser,
-    session: SessionDep,
+    mongo: MongoDep,
     x_workspace_id: Annotated[str | None, Header()] = None,
 ) -> Membership:
     """The tenant-isolation choke point: every workspace-scoped route depends on this.
@@ -87,7 +90,7 @@ async def get_workspace_membership(
         workspace_id = uuid.UUID(x_workspace_id)
     except ValueError as exc:
         raise AppError(400, "invalid_workspace_id", "X-Workspace-Id must be a UUID.") from exc
-    membership = await WorkspaceRepository(session).get_membership(user.id, workspace_id)
+    membership = await WorkspaceRepository(mongo.db).get_membership(user.id, workspace_id)
     if membership is None:
         raise AppError(404, "workspace_not_found", "Workspace not found.")
     return membership
@@ -116,23 +119,60 @@ PageParamsDep = Annotated[PageParams, Depends(get_page_params)]
 
 
 def get_document_service(
-    request: Request, session: SessionDep, settings: SettingsDep
+    request: Request, mongo: MongoDep, settings: SettingsDep
 ) -> DocumentService:
     state = request.app.state
     return DocumentService(
-        session, settings, state.storage, state.job_queue, VectorIndex(state.qdrant)
+        mongo, settings, state.storage, state.job_queue, VectorIndex(state.qdrant)
     )
 
 
-def get_search_service(request: Request, settings: SettingsDep) -> SearchService:
-    return SearchService(request.app.state.query_embedder, request.app.state.qdrant, settings)
+def get_knowledge_retriever(request: Request, settings: SettingsDep) -> KnowledgeRetriever:
+    """The only retrieval path (search, chat): always filtered to one workspace."""
+    return KnowledgeRetriever(
+        request.app.state.query_embedder,
+        request.app.state.qdrant,
+        top_k=settings.retrieval_top_k,
+        score_threshold=settings.retrieval_score_threshold,
+    )
+
+
+RetrieverDep = Annotated[KnowledgeRetriever, Depends(get_knowledge_retriever)]
+
+
+def get_search_service(retriever: RetrieverDep) -> SearchService:
+    return SearchService(retriever)
+
+
+def get_chat_service(
+    request: Request, mongo: MongoDep, retriever: RetrieverDep, settings: SettingsDep
+) -> ChatService:
+    return ChatService(mongo, retriever, request.app.state.llm, settings)
+
+
+def get_agent_service(request: Request, mongo: MongoDep) -> AgentService:
+    return AgentService(mongo, request.app.state.job_queue)
+
+
+def rate_limited(scope: str) -> Callable[..., Awaitable[None]]:
+    """Per-user request limit for an expensive route (it calls OpenAI)."""
+
+    async def check(request: Request, user: CurrentUser, settings: SettingsDep) -> None:
+        limiter = RateLimiter(
+            request.app.state.redis,
+            limit=settings.rate_limit_requests,
+            window_seconds=settings.rate_limit_window_seconds,
+        )
+        await limiter.check(scope, user.id)
+
+    return check
 
 
 def get_health_service(request: Request) -> HealthService:
     state = request.app.state
     return HealthService(
         {
-            "postgres": postgres_check(state.engine),
+            "mongodb": mongodb_check(state.mongo),
             "redis": redis_check(state.redis),
             "qdrant": qdrant_check(state.qdrant),
         },

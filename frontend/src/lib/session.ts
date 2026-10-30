@@ -9,7 +9,7 @@ export interface PersistedValue {
   subscribe: (listener: () => void) => () => void
 }
 
-function persistedValue(key: string): PersistedValue {
+export function persistedValue(key: string): PersistedValue {
   const listeners = new Set<() => void>()
 
   const get = () => {

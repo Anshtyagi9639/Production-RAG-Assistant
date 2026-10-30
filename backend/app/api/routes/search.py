@@ -2,14 +2,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.api.dependencies import WorkspaceMembership, get_search_service
+from app.api.dependencies import WorkspaceMembership, get_search_service, rate_limited
 from app.schemas.documents import SearchRequest, SearchResponse
 from app.services.search import SearchService
 
 router = APIRouter(tags=["search"])
 
 
-@router.post("/search")
+@router.post("/search", dependencies=[Depends(rate_limited("search"))])
 async def search(
     request: SearchRequest,
     membership: WorkspaceMembership,

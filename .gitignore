@@ -22,3 +22,7 @@ backend/storage/
 Thumbs.db
 .vscode/
 .idea/
+
+# Vercel CLI (vercel link / vercel dev) and Python build metadata
+.vercel/
+*.egg-info/

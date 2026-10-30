@@ -1,0 +1,30 @@
+[
+  {
+    "_id": {
+      "$uuid": "b4eef2a4-dae5-561a-901c-513f291f01de"
+    },
+    "email": "admin@copilot.example.com",
+    "full_name": "Demo Admin",
+    "is_active": true,
+    "created_at": {
+      "$date": "2026-09-01T09:00:00Z"
+    },
+    "updated_at": {
+      "$date": "2026-09-01T09:00:00Z"
+    }
+  },
+  {
+    "_id": {
+      "$uuid": "a221f914-58bf-5479-956c-8bd192baf3fc"
+    },
+    "email": "member@copilot.example.com",
+    "full_name": "Demo Member",
+    "is_active": true,
+    "created_at": {
+      "$date": "2026-09-01T09:01:00Z"
+    },
+    "updated_at": {
+      "$date": "2026-09-01T09:01:00Z"
+    }
+  }
+]

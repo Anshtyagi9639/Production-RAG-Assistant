@@ -1,32 +1,41 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import Select, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.pagination import PageParams, apply_sort, count_statement
-from app.models import Document, User
+from app.core.pagination import PageParams, sort_spec
+from app.db.mongo import Database, Session
+from app.models import Document
 from app.models.enums import DocumentStatus
+from app.models.records import utcnow
+from app.repositories.users import UserRepository
 
 DocumentRow = tuple[Document, str | None]
 
-SORTABLE = {"created_at": Document.created_at, "filename": Document.filename}
-
-
-def _with_uploader(workspace_id: uuid.UUID) -> Select[Any]:
-    return (
-        select(Document, User.full_name)
-        .outerjoin(User, User.id == Document.uploaded_by_id)
-        .where(Document.workspace_id == workspace_id)
-    )
+SORTABLE = {"created_at": "created_at", "filename": "filename"}
 
 
 class DocumentRepository:
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+    def __init__(self, db: Database) -> None:
+        self._documents = db["documents"]
+        self._chunks = db["document_chunks"]
+        self._users = UserRepository(db)
 
-    def add(self, document: Document) -> None:
-        self._session.add(document)
+    async def insert(self, document: Document, session: Session | None = None) -> None:
+        await self._documents.insert_one(document.to_document(), session=session)
+
+    async def mark_failed(self, document: Document, reason: str) -> None:
+        document.status = DocumentStatus.FAILED
+        document.error_message = reason
+        document.updated_at = utcnow()
+        await self._documents.update_one(
+            {"_id": document.id, "workspace_id": document.workspace_id},
+            {
+                "$set": {
+                    "status": document.status.value,
+                    "error_message": reason,
+                    "updated_at": document.updated_at,
+                }
+            },
+        )
 
     async def list(
         self,
@@ -35,22 +44,32 @@ class DocumentRepository:
         sort: str,
         status: DocumentStatus | None,
     ) -> tuple[list[DocumentRow], int]:
-        statement = _with_uploader(workspace_id)
+        query: dict[str, Any] = {"workspace_id": workspace_id}
         if status is not None:
-            statement = statement.where(Document.status == status)
-        statement = apply_sort(statement, sort, SORTABLE, Document.id)
-        total = await self._session.scalar(count_statement(statement)) or 0
-        rows = await self._session.execute(statement.limit(params.page_size).offset(params.offset))
-        return [(document, name) for document, name in rows.tuples()], total
+            query["status"] = status.value
+        order = sort_spec(sort, SORTABLE)
+        total = await self._documents.count_documents(query)
+        cursor = self._documents.find(query).sort(order).skip(params.offset).limit(params.page_size)
+        documents = [Document.from_document(item) async for item in cursor]
+        names = await self._users.names(d.uploaded_by_id for d in documents)
+        return [
+            (d, names.get(d.uploaded_by_id) if d.uploaded_by_id else None) for d in documents
+        ], total
 
     async def get(self, workspace_id: uuid.UUID, document_id: uuid.UUID) -> DocumentRow | None:
-        row = (
-            await self._session.execute(
-                _with_uploader(workspace_id).where(Document.id == document_id)
-            )
-        ).first()
-        return (row[0], row[1]) if row else None
+        item = await self._documents.find_one({"_id": document_id, "workspace_id": workspace_id})
+        if item is None:
+            return None
+        document = Document.from_document(item)
+        names = await self._users.names([document.uploaded_by_id])
+        return document, names.get(document.uploaded_by_id) if document.uploaded_by_id else None
 
-    async def delete(self, document: Document) -> None:
-        # document_chunks rows go with it (ON DELETE CASCADE).
-        await self._session.delete(document)
+    async def delete(self, document: Document, session: Session) -> None:
+        """Delete the document and its chunks (the former ON DELETE CASCADE), in the caller's
+        transaction."""
+        await self._chunks.delete_many(
+            {"document_id": document.id, "workspace_id": document.workspace_id}, session=session
+        )
+        await self._documents.delete_one(
+            {"_id": document.id, "workspace_id": document.workspace_id}, session=session
+        )

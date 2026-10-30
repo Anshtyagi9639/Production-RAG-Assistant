@@ -1,10 +1,8 @@
 import uuid
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ActivityLog, Document, DocumentChunk
+from app.db.mongo import Mongo
 from app.models.enums import DocumentStatus
 from app.rag.indexing import COLLECTION
 from tests.conftest import fixture_bytes
@@ -15,9 +13,7 @@ from tests.integration.conftest import Api
 pytestmark = pytest.mark.integration
 
 
-async def test_upload_stores_file_records_uploaded_and_queues_a_job(
-    api: Api, db_session: AsyncSession
-) -> None:
+async def test_upload_stores_file_records_uploaded_and_queues_a_job(api: Api, mongo: Mongo) -> None:
     account = await register(api.client, "up@example.com", "Una Park")
 
     body = await upload(api, account, "two_pages.pdf", fixture_bytes("two_pages.pdf"))
@@ -26,18 +22,18 @@ async def test_upload_stores_file_records_uploaded_and_queues_a_job(
     assert body["filename"] == "two_pages.pdf"
     assert body["content_type"] == "application/pdf"
     assert body["uploaded_by_name"] == "Una Park"
-    document = await db_session.get(Document, uuid.UUID(str(body["id"])))
+    document = await mongo.db["documents"].find_one({"_id": uuid.UUID(str(body["id"]))})
     assert document is not None
-    assert document.workspace_id == account.workspace_id
-    assert (api.storage_root / document.storage_key).read_bytes() == fixture_bytes("two_pages.pdf")
-    assert document.storage_key != "two_pages.pdf"
-    [job] = api.queue.jobs
-    assert (job.document_id, job.workspace_id) == (document.id, account.workspace_id)
-    activity = await db_session.scalar(
-        select(ActivityLog).where(ActivityLog.action == "document.uploaded")
+    assert document["workspace_id"] == account.workspace_id
+    assert (api.storage_root / document["storage_key"]).read_bytes() == fixture_bytes(
+        "two_pages.pdf"
     )
+    assert document["storage_key"] != "two_pages.pdf"
+    [job] = api.queue.jobs
+    assert (job.document_id, job.workspace_id) == (document["_id"], account.workspace_id)
+    activity = await mongo.db["activity_logs"].find_one({"action": "document.uploaded"})
     assert activity is not None
-    assert activity.details == {"filename": "two_pages.pdf"}
+    assert activity["details"] == {"filename": "two_pages.pdf"}
 
 
 @pytest.mark.parametrize(
@@ -49,7 +45,7 @@ async def test_upload_stores_file_records_uploaded_and_queues_a_job(
     ],
 )
 async def test_rejected_uploads_leave_no_trace(
-    api: Api, db_session: AsyncSession, filename: str, fixture: str, status: int, code: str
+    api: Api, mongo: Mongo, filename: str, fixture: str, status: int, code: str
 ) -> None:
     account = await register(api.client, "bad@example.com")
 
@@ -61,7 +57,7 @@ async def test_rejected_uploads_leave_no_trace(
 
     assert response.status_code == status
     assert response.json()["error"]["code"] == code
-    assert await db_session.scalar(select(func.count()).select_from(Document)) == 0
+    assert await mongo.db["documents"].count_documents({}) == 0
     assert api.queue.jobs == []
     assert not api.storage_root.exists() or not any(api.storage_root.iterdir())
 
@@ -79,12 +75,10 @@ async def test_oversized_upload_is_413(api: Api) -> None:
 
 
 async def test_queue_outage_is_503_and_the_document_is_failed_not_stuck(
-    api: Api, db_session: AsyncSession
+    api: Api, mongo: Mongo
 ) -> None:
     account = await register(api.client, "q@example.com")
-    api.client._transport.app.state.job_queue = RecordingJobQueue(
-        error=ConnectionError("redis down")
-    )  # type: ignore[attr-defined]
+    api.app.state.job_queue = RecordingJobQueue(error=ConnectionError("redis down"))
 
     response = await api.client.post(
         "/api/documents/upload", files={"file": ("a.txt", b"hello")}, headers=account.headers()
@@ -92,10 +86,10 @@ async def test_queue_outage_is_503_and_the_document_is_failed_not_stuck(
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "queue_unavailable"
-    document = await db_session.scalar(select(Document))
+    document = await mongo.db["documents"].find_one({})
     assert document is not None
-    assert document.status == DocumentStatus.FAILED
-    assert document.error_message == "Processing could not be queued. Upload the file again."
+    assert document["status"] == DocumentStatus.FAILED
+    assert document["error_message"] == "Processing could not be queued. Upload the file again."
 
 
 async def test_worker_pipeline_completes_and_fails_documents_visible_through_the_api(
@@ -171,15 +165,15 @@ async def test_other_users_cannot_read_or_delete_a_document(api: Api) -> None:
     assert still_there.status_code == 200
 
 
-async def test_delete_removes_row_chunks_vectors_and_file(
-    api: Api, db_session: AsyncSession
-) -> None:
+async def test_delete_removes_document_chunks_vectors_and_file(api: Api, mongo: Mongo) -> None:
     account = await register(api.client, "del@example.com")
     document = await upload(api, account, "sample.md", fixture_bytes("sample.md"))
     await run_queued_jobs(api)
-    stored = await db_session.get(Document, uuid.UUID(str(document["id"])))
+    document_id = uuid.UUID(str(document["id"]))
+    stored = await mongo.db["documents"].find_one({"_id": document_id})
     assert stored is not None
-    storage_key = stored.storage_key
+    storage_key = stored["storage_key"]
+    assert await mongo.db["document_chunks"].count_documents({"document_id": document_id}) > 0
     assert (await api.qdrant.count(COLLECTION)).count > 0
 
     response = await api.client.delete(
@@ -187,19 +181,11 @@ async def test_delete_removes_row_chunks_vectors_and_file(
     )
 
     assert response.status_code == 204
-    db_session.expire_all()
-    assert await db_session.get(Document, uuid.UUID(str(document["id"]))) is None
-    assert await db_session.scalar(select(func.count()).select_from(DocumentChunk)) == 0
+    assert await mongo.db["documents"].find_one({"_id": document_id}) is None
+    assert await mongo.db["document_chunks"].count_documents({}) == 0
     assert (await api.qdrant.count(COLLECTION)).count == 0
     assert not (api.storage_root / storage_key).exists()
-    assert (
-        await db_session.scalar(
-            select(func.count())
-            .select_from(ActivityLog)
-            .where(ActivityLog.action == "document.deleted")
-        )
-        == 1
-    )
+    assert await mongo.db["activity_logs"].count_documents({"action": "document.deleted"}) == 1
 
 
 async def test_search_returns_only_the_callers_workspace(api: Api) -> None:

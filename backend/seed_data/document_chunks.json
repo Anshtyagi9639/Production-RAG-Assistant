@@ -1,0 +1,86 @@
+[
+  {
+    "_id": {
+      "$uuid": "fe3267b6-27f9-5d8d-8f76-d7956ed1f336"
+    },
+    "document_id": {
+      "$uuid": "be88cdf1-5523-57ca-bbdd-9bfd0dba8712"
+    },
+    "workspace_id": {
+      "$uuid": "879886d8-6441-5a65-9d44-40268f6de906"
+    },
+    "chunk_index": 0,
+    "page": null,
+    "text": "CUSTOMS WISE DEMO KNOWLEDGE BASE\nDEVELOPMENT / DEMO CONTENT ONLY. This text is synthetic sample material written to exercise the\napplication. It is not official customs guidance and not client information. Always confirm\nrequirements with the relevant customs authority before acting on anything described here.\n\n1. Customs clearance overview\nCustoms clearance is the process of getting goods released by the customs authority when they\ncross a border. In this demo scenario, a shipment is declared to customs with a description of\nthe goods, their commodity code, their value and their origin. The authority checks the\ndeclaration, may inspect the goods, calculates any duties and taxes, and then releases the\nshipment once everything is settled. Delays usually come from incomplete paperwork, unclear\nproduct descriptions or values that do not match the commercial invoice. A broker or freight\nforwarder often prepares the declaration on behalf of the importer, but the importer remains\nresponsible for the accuracy of the information. Good practice in this demo is to keep one\nshipment folder per consignment containing the invoice, packing list, transport document and\nany certificates, so that questions from customs can be answered quickly. Clearance times in the\nscenario range from a few hours for routine low-risk shipments to several days when a physical\ninspection is selected. Tracking the declaration status and responding promptly to queries are\nthe two habits that shorten clearance the most in this example knowledge base.\n\n2. Import documentation\nFor a typical import in this demo, the importer prepares a commercial invoice that states the\nseller, the buyer, a clear description of each item, quantities, unit prices, the currency and\nthe agreed delivery terms. A packing list accompanies the invoice and shows how the goods are\npacked, with weights and dimensions for each package. The transport document depends on the\nmode of transport: a bill of lading for sea freight, an air waybill for air freight, or a road\nconsignment note for trucks. Where a preferential duty rate is claimed, a proof of origin is\nneeded, such as an origin statement on the invoice or a certificate issued by an authorised\nbody. Some goods also need licences or permits before they can be imported. In the demo\nworkflow, the documents are checked for consistency before submission: the description,\nquantity and value must match across the invoice, packing list and declaration. Missing or\ninconsistent documents are the most common reason the demo team sees a declaration rejected or\nheld for review, so the checklist approach described here is used for every import.\n\n3. Export documentation\nExports in this demo follow a similar pattern in reverse. The exporter issues a commercial\ninvoice and packing list, and the export declaration is lodged before the goods leave. The\ndeclaration records the exporter, the consignee, the commodity code, the value and the\ndestination. Some products are subject to export controls, for example items with possible\nmilitary or dual-use applications, and these need an export licence before shipment. When the\nbuyer wants to claim preferential treatment in the destination country, the exporter provides\nthe appropriate proof of origin and keeps supporting evidence that the goods meet the rules of\norigin. In the demo process, the exporter also keeps evidence that the goods actually left the\ncountry, such as the exit confirmation, because this may be needed to justify a zero-rated\nsale for tax purposes. Keeping copies of every export document for the required retention\nperiod is part of the demo checklist, so that later audits can be answered without searching\nthrough emails.",
+    "token_count": 717,
+    "created_at": {
+      "$date": "2026-09-01T09:11:00Z"
+    },
+    "updated_at": {
+      "$date": "2026-09-01T09:11:00Z"
+    }
+  },
+  {
+    "_id": {
+      "$uuid": "25bab059-b06d-586a-b1b2-5de234795ddb"
+    },
+    "document_id": {
+      "$uuid": "be88cdf1-5523-57ca-bbdd-9bfd0dba8712"
+    },
+    "workspace_id": {
+      "$uuid": "879886d8-6441-5a65-9d44-40268f6de906"
+    },
+    "chunk_index": 1,
+    "page": null,
+    "text": "4. Customs compliance\nCompliance in this demo means declaring goods correctly and being able to prove it later. The\nkey points are the commodity classification, the customs value and the origin of the goods.\nClassification determines the duty rate and whether any restrictions apply, so the demo team\nrecords the reasoning behind each classification decision. The customs value is normally based\non the price actually paid, adjusted for items such as freight, insurance, royalties or assists\nwhere required. Origin rules decide whether preferential rates can be used. The demo company\nruns periodic internal reviews that compare a sample of declarations with the underlying\ninvoices and transport documents, and it corrects errors through the voluntary disclosure\nprocess described by the authority. Training the people who prepare declarations, keeping\nproduct data up to date and documenting decisions are the practices this knowledge base treats\nas the foundation of a compliant import and export operation.\n\n5. Food customs requirements\nFood products in this demo scenario usually face extra checks beyond the standard customs\nprocedure. Depending on the product, the importer may need health certificates issued in the\ncountry of origin, prior notification to the food safety authority before arrival, and\nentry through a designated border control point that can perform documentary, identity and\nphysical checks. Labels must meet the destination market's rules on language, ingredients,\nallergens and nutrition information. Products of animal origin are generally subject to the\nstrictest controls in the demo, while some plant products need phytosanitary certificates.\nTemperature-controlled goods require evidence that the cold chain was maintained. In the demo\nworkflow, the importer confirms all of these requirements with the competent authorities before\nthe goods are shipped, because food consignments that arrive without the right certificates may\nbe held, returned or destroyed at the importer's cost.\n\n6. Customs valuation and duty calculation\nIn this demo, import duty is usually calculated as a percentage of the customs value, although\nsome goods carry specific duties based on weight or quantity instead. The starting point is the\ntransaction value: the price paid or payable for the goods when sold for export to the\ndestination. The demo team then checks whether adjustments are required. Costs of transport and\ninsurance up to the point of entry are typically added, as are buying commissions in some cases,\nroyalties and licence fees connected to the goods, and the value of tools or materials supplied\nfree of charge to the producer. Discounts given before importation may be deducted when they are\ngenuine and documented. Once the customs value is known, the duty rate linked to the commodity\ncode is applied, and import VAT or similar taxes are calculated on top of the duty-inclusive\nvalue. The demo knowledge base recommends keeping a valuation worksheet for each recurring\nsupplier so that the same adjustments are applied consistently, and reviewing it whenever the\ncommercial terms change, for example when the delivery terms move from one Incoterm to another.\n\n7. Bonded warehousing and duty deferral\nThe demo company sometimes stores imported goods in a bonded warehouse instead of releasing them\nstraight into free circulation. While the goods remain in the bonded warehouse, duties and\nimport taxes are suspended, which helps cash flow when goods are held for a long time or may be\nre-exported. When goods leave the warehouse for the domestic market, the duty becomes payable at\nthat point. Goods that are re-exported directly from the warehouse never pay import duty. The\nwarehouse keeper must keep accurate stock records that reconcile with the customs declarations,\nand the authority can audit these records at any time. In this demo scenario, the logistics team\nreviews warehouse stock reports every month and compares them with the declarations lodged for\ngoods entering and leaving the warehouse, so that any discrepancy is investigated before an\naudit finds it. This section, like the rest of the document, is synthetic demo material.",
+    "token_count": 778,
+    "created_at": {
+      "$date": "2026-09-01T09:11:00Z"
+    },
+    "updated_at": {
+      "$date": "2026-09-01T09:11:00Z"
+    }
+  },
+  {
+    "_id": {
+      "$uuid": "893df17d-a21d-5472-9175-d60258d5c183"
+    },
+    "document_id": {
+      "$uuid": "be88cdf1-5523-57ca-bbdd-9bfd0dba8712"
+    },
+    "workspace_id": {
+      "$uuid": "879886d8-6441-5a65-9d44-40268f6de906"
+    },
+    "chunk_index": 2,
+    "page": null,
+    "text": "8. Record keeping and audits\nThe demo company keeps customs records for the full retention period required by the authority.\nRecords include declarations, invoices, transport documents, proofs of origin, licences,\nvaluation worksheets and correspondence with customs. Each record is stored against the\nshipment reference so that it can be retrieved quickly during an audit. Before an audit, the\ndemo compliance lead prepares a sample of declarations, checks that each one is supported by\ncomplete documents, and notes any corrections that were already disclosed. After the audit, the\nteam records the findings, agrees actions with the people responsible, and tracks them to\ncompletion. Treating audits as a routine check rather than an exceptional event is the final\npractice recommended by this synthetic demo knowledge base.",
+    "token_count": 150,
+    "created_at": {
+      "$date": "2026-09-01T09:11:00Z"
+    },
+    "updated_at": {
+      "$date": "2026-09-01T09:11:00Z"
+    }
+  },
+  {
+    "_id": {
+      "$uuid": "59179180-3d59-5bdf-b2c9-1ac6eeff1001"
+    },
+    "document_id": {
+      "$uuid": "cb7a50b0-521e-5ae1-83d8-2f1c5c8b9483"
+    },
+    "workspace_id": {
+      "$uuid": "5b8eea89-5635-5551-8f2e-172f811d15c4"
+    },
+    "chunk_index": 0,
+    "page": null,
+    "text": "MEMBER SANDBOX NOTES. DEVELOPMENT / DEMO CONTENT ONLY.\nThis document exists only to check that each workspace sees just its own data.",
+    "token_count": 30,
+    "created_at": {
+      "$date": "2026-09-01T09:13:00Z"
+    },
+    "updated_at": {
+      "$date": "2026-09-01T09:13:00Z"
+    }
+  }
+]

@@ -3,10 +3,13 @@
 import uuid
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 from qdrant_client import AsyncQdrantClient
+from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 
 from app.ai.retrieval import retrieve, workspace_filter
+from app.rag import indexing
 from app.rag.chunking import chunk_pages
 from app.rag.extraction import Page
 from app.rag.indexing import COLLECTION, VectorIndex, VectorIndexError, ensure_collection
@@ -154,3 +157,88 @@ async def test_qdrant_failures_become_a_user_facing_error() -> None:
             client, [0.1] * TEST_DIMENSIONS, workspace_id=uuid.uuid4(), top_k=3, score_threshold=0
         )
     await client.close()
+
+
+class FlakyQdrant:
+    """Wraps the in-process client; the first `failures` writes raise `error`."""
+
+    def __init__(self, client: AsyncQdrantClient, failures: int, error: Exception) -> None:
+        self._client = client
+        self.failures = failures
+        self.error = error
+        self.calls = 0
+
+    async def delete(self, *args: object, **kwargs: object) -> object:
+        self.calls += 1
+        if self.failures > 0:
+            self.failures -= 1
+            raise self.error
+        return await self._client.delete(*args, **kwargs)  # type: ignore[arg-type]
+
+    async def upsert(self, *args: object, **kwargs: object) -> object:
+        return await self._client.upsert(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def _transport_error() -> Exception:
+    return ResponseHandlingException(httpx.RemoteProtocolError("Server disconnected"))
+
+
+@pytest.fixture
+def no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(indexing, "RETRY_BASE_DELAY_SECONDS", 0)
+
+
+@pytest.mark.usefixtures("no_backoff")
+async def test_a_dropped_connection_is_retried_and_the_write_succeeds(
+    qdrant: AsyncQdrantClient,
+) -> None:
+    flaky = FlakyQdrant(qdrant, failures=1, error=_transport_error())
+    workspace_id = uuid.uuid4()
+    chunks = chunk_pages([Page(1, "Refunds take 30 days.")], uuid.uuid4())
+
+    await VectorIndex(flaky).replace_document(  # type: ignore[arg-type]
+        document_id=chunks[0].id,
+        workspace_id=workspace_id,
+        filename="a.md",
+        created_at=datetime(2026, 9, 1, tzinfo=UTC),
+        chunks=chunks,
+        vectors=[embedder.vector(c.text) for c in chunks],
+    )
+
+    assert flaky.calls == 2
+    assert (await qdrant.count(COLLECTION)).count == 1
+
+
+@pytest.mark.usefixtures("no_backoff")
+async def test_persistent_transient_failures_give_up_after_the_last_attempt(
+    qdrant: AsyncQdrantClient,
+) -> None:
+    flaky = FlakyQdrant(qdrant, failures=10, error=_transport_error())
+
+    with pytest.raises(VectorIndexError):
+        await VectorIndex(flaky).delete_document(uuid.uuid4(), uuid.uuid4())  # type: ignore[arg-type]
+    assert flaky.calls == indexing.MAX_ATTEMPTS
+
+
+@pytest.mark.usefixtures("no_backoff")
+async def test_client_errors_are_not_retried(qdrant: AsyncQdrantClient) -> None:
+    bad_request = UnexpectedResponse(400, "Bad Request", b"{}", httpx.Headers())
+    flaky = FlakyQdrant(qdrant, failures=10, error=bad_request)
+
+    with pytest.raises(VectorIndexError):
+        await VectorIndex(flaky).delete_document(uuid.uuid4(), uuid.uuid4())  # type: ignore[arg-type]
+    assert flaky.calls == 1
+
+
+@pytest.mark.parametrize(
+    ("error", "transient"),
+    [
+        (_transport_error(), True),
+        (UnexpectedResponse(503, "Unavailable", b"", httpx.Headers()), True),
+        (UnexpectedResponse(429, "Too Many Requests", b"", httpx.Headers()), True),
+        (UnexpectedResponse(404, "Not Found", b"", httpx.Headers()), False),
+        (ValueError("bad payload"), False),
+    ],
+)
+def test_only_transient_errors_are_retried(error: Exception, transient: bool) -> None:
+    assert indexing.is_transient(error) is transient

@@ -1,18 +1,18 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.pagination import PageParams, count_statement
-from app.models import ActivityLog, User
+from app.core.pagination import PageParams
+from app.db.mongo import Database, Session
+from app.models import ActivityLog
+from app.repositories.users import UserRepository
 
 
 class ActivityRepository:
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+    def __init__(self, db: Database) -> None:
+        self._activity = db["activity_logs"]
+        self._users = UserRepository(db)
 
-    def record(
+    async def record(
         self,
         *,
         workspace_id: uuid.UUID,
@@ -21,28 +21,31 @@ class ActivityRepository:
         entity_type: str | None = None,
         entity_id: uuid.UUID | None = None,
         details: dict[str, Any] | None = None,
+        session: Session | None = None,
     ) -> None:
-        """Add an entry to the caller's transaction, so it commits (or not) with the change."""
-        self._session.add(
-            ActivityLog(
-                workspace_id=workspace_id,
-                user_id=user_id,
-                action=action,
-                entity_type=entity_type,
-                entity_id=entity_id,
-                details=details,
-            )
+        """Add an entry; pass the caller's transaction session so it commits (or not) with the
+        change it describes."""
+        entry = ActivityLog(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            details=details,
         )
+        await self._activity.insert_one(entry.to_document(), session=session)
 
     async def list(
         self, workspace_id: uuid.UUID, params: PageParams
     ) -> tuple[list[tuple[ActivityLog, str | None]], int]:
-        statement = (
-            select(ActivityLog, User.full_name)
-            .outerjoin(User, User.id == ActivityLog.user_id)
-            .where(ActivityLog.workspace_id == workspace_id)
-            .order_by(ActivityLog.created_at.desc(), ActivityLog.id.desc())
+        query = {"workspace_id": workspace_id}
+        total = await self._activity.count_documents(query)
+        cursor = (
+            self._activity.find(query)
+            .sort([("created_at", -1), ("_id", -1)])
+            .skip(params.offset)
+            .limit(params.page_size)
         )
-        total = await self._session.scalar(count_statement(statement)) or 0
-        rows = await self._session.execute(statement.limit(params.page_size).offset(params.offset))
-        return [(entry, name) for entry, name in rows.tuples()], total
+        entries = [ActivityLog.from_document(item) async for item in cursor]
+        names = await self._users.names(entry.user_id for entry in entries)
+        return [(e, names.get(e.user_id) if e.user_id else None) for e in entries], total

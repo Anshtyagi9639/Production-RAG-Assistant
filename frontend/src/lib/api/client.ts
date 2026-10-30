@@ -2,6 +2,8 @@ import { accessToken } from "@/lib/session"
 import type { ErrorBody } from "@/lib/api/types"
 
 // Read as a literal so Next.js inlines it at build time. The only env var the frontend uses.
+// Empty means the API is served from this site's own origin under /api (one Vercel project
+// routes /api/* to the backend service); local development sets it to the backend's URL.
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/+$/, "")
 
 export class ApiError extends Error {
@@ -11,6 +13,8 @@ export class ApiError extends Error {
     message: string,
     readonly details?: unknown,
     readonly retryAfterSeconds?: number,
+    /** The backend's X-Request-ID: the same ID appears on every backend log line for the call. */
+    readonly requestId?: string,
   ) {
     super(message)
     this.name = "ApiError"
@@ -55,19 +59,19 @@ async function toApiError(response: Response): Promise<ApiError> {
   if (response.status === 429 && retryAfter) {
     message = `Too many requests. Try again in ${retryAfter} seconds.`
   }
-  return new ApiError(response.status, code, message, body.error?.details, retryAfter)
+  return new ApiError(
+    response.status,
+    code,
+    message,
+    body.error?.details,
+    retryAfter,
+    response.headers.get("X-Request-ID") ?? undefined,
+  )
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  if (!API_URL) {
-    throw new ApiError(
-      0,
-      "config_error",
-      "The app is not configured: NEXT_PUBLIC_API_URL is not set.",
-    )
-  }
-
-  const url = new URL(`${API_URL}/api${path}`)
+  // With no API_URL the path is relative and resolves against the page's own origin.
+  const url = new URL(`${API_URL}/api${path}`, window.location.origin)
   for (const [key, value] of Object.entries(options.query ?? {})) {
     if (value !== undefined && value !== "") url.searchParams.set(key, String(value))
   }
@@ -95,10 +99,12 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error
+    // fetch rejects when nothing answers at API_URL (backend stopped, wrong port) or when the
+    // browser blocks the response (an origin missing from the backend's ALLOWED_ORIGINS).
     throw new ApiError(
       0,
       "network_error",
-      "Can't reach the server. Check your connection and try again.",
+      `Can't reach the server at ${API_URL || window.location.origin}. Make sure the backend is running, then try again.`,
     )
   }
 

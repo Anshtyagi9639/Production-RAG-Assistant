@@ -3,11 +3,8 @@ from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ActivityLog, User, Workspace, WorkspaceMember
-from app.models.enums import WorkspaceRole
+from app.db.mongo import Mongo
 from app.repositories.activity import ActivityRepository
 from tests.conftest import TEST_JWT_SECRET
 from tests.integration.api_helpers import PASSWORD, register
@@ -16,12 +13,8 @@ from tests.integration.conftest import Api
 pytestmark = pytest.mark.integration
 
 
-async def _count(session: AsyncSession, model: type, *where: object) -> int:
-    return await session.scalar(select(func.count()).select_from(model).where(*where)) or 0  # type: ignore[arg-type]
-
-
 async def test_register_creates_user_workspace_owner_membership_and_activity(
-    api: Api, db_session: AsyncSession
+    api: Api, mongo: Mongo
 ) -> None:
     response = await api.client.post(
         "/api/auth/register",
@@ -31,27 +24,21 @@ async def test_register_creates_user_workspace_owner_membership_and_activity(
     assert response.status_code == 201
     body = response.json()
     assert body["user"]["email"] == "ana@example.com"
-    assert body["workspace"] == {
-        "id": body["workspace"]["id"],
-        "name": "Ana's workspace",
-        "role": "owner",
-        "created_at": body["workspace"]["created_at"],
-    }
-    user = await db_session.scalar(select(User).where(User.email == "ana@example.com"))
+    assert body["workspace"]["name"] == "Ana's workspace"
+    assert body["workspace"]["role"] == "owner"
+    user = await mongo.db["users"].find_one({"email": "ana@example.com"})
     assert user is not None
-    assert user.password_hash.startswith("$argon2")
-    member = await db_session.scalar(
-        select(WorkspaceMember).where(WorkspaceMember.user_id == user.id)
-    )
+    assert str(user["_id"]) == body["user"]["id"]
+    assert user["password_hash"].startswith("$argon2")
+    assert PASSWORD not in user["password_hash"]
+    member = await mongo.db["workspace_members"].find_one({"user_id": user["_id"]})
     assert member is not None
-    assert (str(member.workspace_id), member.role) == (body["workspace"]["id"], WorkspaceRole.OWNER)
-    assert await _count(db_session, ActivityLog, ActivityLog.action == "workspace.created") == 1
+    assert (str(member["workspace_id"]), member["role"]) == (body["workspace"]["id"], "owner")
+    assert await mongo.db["activity_logs"].count_documents({"action": "workspace.created"}) == 1
 
 
-async def test_register_is_atomic(
-    api: Api, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def fail(*_: object, **__: object) -> None:
+async def test_register_is_atomic(api: Api, mongo: Mongo, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fail(*_: object, **__: object) -> None:
         raise RuntimeError("activity log unavailable")
 
     monkeypatch.setattr(ActivityRepository, "record", fail)
@@ -62,13 +49,13 @@ async def test_register_is_atomic(
     )
 
     assert response.status_code == 500
-    assert await _count(db_session, User, User.email == "atomic@example.com") == 0
-    assert await _count(db_session, Workspace) == 0
+    # The user, workspace and membership were inserted in the same transaction, then rolled back.
+    assert await mongo.db["users"].count_documents({"email": "atomic@example.com"}) == 0
+    assert await mongo.db["workspaces"].count_documents({}) == 0
+    assert await mongo.db["workspace_members"].count_documents({}) == 0
 
 
-async def test_duplicate_email_is_rejected_case_insensitively(
-    api: Api, db_session: AsyncSession
-) -> None:
+async def test_duplicate_email_is_rejected_case_insensitively(api: Api, mongo: Mongo) -> None:
     await register(api.client, "dup@example.com")
 
     response = await api.client.post(
@@ -78,7 +65,8 @@ async def test_duplicate_email_is_rejected_case_insensitively(
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "email_taken"
-    assert await _count(db_session, User) == 1
+    assert await mongo.db["users"].count_documents({}) == 1
+    assert await mongo.db["workspaces"].count_documents({}) == 1
 
 
 @pytest.mark.parametrize(
@@ -96,6 +84,19 @@ async def test_wrong_credentials_get_the_same_401(api: Api, email: str, password
     }
 
 
+async def test_inactive_user_cannot_log_in_or_use_a_token(api: Api, mongo: Mongo) -> None:
+    account = await register(api.client, "inactive@example.com")
+    await mongo.db["users"].update_one({"_id": account.user_id}, {"$set": {"is_active": False}})
+
+    login = await api.client.post(
+        "/api/auth/login", json={"email": "inactive@example.com", "password": PASSWORD}
+    )
+    me = await api.client.get("/api/auth/me", headers={"Authorization": f"Bearer {account.token}"})
+
+    assert login.status_code == 401
+    assert me.status_code == 401
+
+
 async def test_me_returns_the_user_and_their_workspaces(api: Api) -> None:
     account = await register(api.client, "me@example.com", "Mia Chen")
 
@@ -106,6 +107,7 @@ async def test_me_returns_the_user_and_their_workspaces(api: Api) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["user"]["full_name"] == "Mia Chen"
+    assert body["user"]["id"] == str(account.user_id)
     assert [w["id"] for w in body["workspaces"]] == [str(account.workspace_id)]
 
 
@@ -150,10 +152,10 @@ async def test_foreign_workspace_is_not_found(api: Api) -> None:
     alice = await register(api.client, "alice@example.com", "Alice")
     bob = await register(api.client, "bob@example.com", "Bob")
 
-    response = await api.client.get("/api/documents", headers=bob.headers(alice.workspace_id))
-
-    assert response.status_code == 404
-    assert response.json()["error"]["code"] == "workspace_not_found"
+    for path in ("/api/documents", "/api/activity", "/api/stats"):
+        response = await api.client.get(path, headers=bob.headers(alice.workspace_id))
+        assert response.status_code == 404, path
+        assert response.json()["error"]["code"] == "workspace_not_found"
 
 
 @pytest.mark.parametrize(
@@ -173,7 +175,7 @@ async def test_workspace_header_is_required_and_validated(
     assert response.json()["error"]["code"] == code
 
 
-async def test_create_workspace_makes_the_creator_owner(api: Api) -> None:
+async def test_create_workspace_makes_the_creator_owner(api: Api, mongo: Mongo) -> None:
     account = await register(api.client, "owner@example.com")
     auth = {"Authorization": f"Bearer {account.token}"}
 
@@ -186,9 +188,13 @@ async def test_create_workspace_makes_the_creator_owner(api: Api) -> None:
         ("Ana's workspace", "owner"),
         ("Finance", "owner"),
     ]
+    workspace_id = uuid.UUID(created.json()["id"])
+    member = await mongo.db["workspace_members"].find_one({"workspace_id": workspace_id})
+    assert member is not None
+    assert (member["user_id"], member["role"]) == (account.user_id, "owner")
 
 
-async def test_owner_adds_member_who_can_read_but_not_upload(api: Api) -> None:
+async def test_owner_adds_member_who_can_read_but_not_upload(api: Api, mongo: Mongo) -> None:
     owner = await register(api.client, "own@example.com", "Olga")
     member = await register(api.client, "mem@example.com", "Max")
     auth = {"Authorization": f"Bearer {owner.token}"}
@@ -200,6 +206,11 @@ async def test_owner_adds_member_who_can_read_but_not_upload(api: Api) -> None:
     )
     assert added.status_code == 201
     assert added.json()["role"] == "member"
+    row = await mongo.db["workspace_members"].find_one(
+        {"workspace_id": owner.workspace_id, "user_id": member.user_id}
+    )
+    assert row is not None
+    assert row["role"] == "member"
 
     as_member = member.headers(owner.workspace_id)
     assert (await api.client.get("/api/documents", headers=as_member)).status_code == 200
@@ -220,6 +231,8 @@ async def test_owner_adds_member_who_can_read_but_not_upload(api: Api) -> None:
         headers={"Authorization": f"Bearer {member.token}"},
     )
     assert by_member.status_code == 403
+    members = mongo.db["workspace_members"]
+    assert await members.count_documents({"workspace_id": owner.workspace_id}) == 2
 
 
 async def test_adding_an_unknown_email_is_404(api: Api) -> None:

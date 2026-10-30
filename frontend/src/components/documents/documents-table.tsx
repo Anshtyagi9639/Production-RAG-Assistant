@@ -6,10 +6,10 @@ import Link from "next/link"
 import { useState } from "react"
 
 import { DeleteDocumentDialog } from "@/components/documents/delete-document-dialog"
+import { FileTypeIcon } from "@/components/documents/file-type-icon"
 import { isInProgress, STATUS_LABELS, StatusBadge } from "@/components/documents/status-badge"
 import { Pagination } from "@/components/pagination"
 import { EmptyState, ErrorState, ListSkeleton } from "@/components/states"
-import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -25,10 +25,19 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { documentsApi } from "@/lib/api/endpoints"
+import { documentsApi, statsApi } from "@/lib/api/endpoints"
 import type { DocumentSort, DocumentStatus } from "@/lib/api/types"
-import { formatBytes, formatDateTime } from "@/lib/format"
+import {
+  FILE_KIND_LABELS,
+  fileKind,
+  formatBytes,
+  formatDateTime,
+  formatNumber,
+  formatRelative,
+  plural,
+} from "@/lib/format"
 import { queryKeys } from "@/lib/query-keys"
+import { cn } from "@/lib/utils"
 
 const PAGE_SIZE = 20
 const POLL_INTERVAL_MS = 3000
@@ -38,7 +47,69 @@ const SORT_OPTIONS: { value: DocumentSort; label: string }[] = [
   { value: "filename", label: "Name A–Z" },
   { value: "-filename", label: "Name Z–A" },
 ]
-const STATUS_OPTIONS: DocumentStatus[] = ["UPLOADED", "PROCESSING", "COMPLETED", "FAILED"]
+const STATUS_FILTERS: (DocumentStatus | undefined)[] = [
+  undefined,
+  "COMPLETED",
+  "PROCESSING",
+  "UPLOADED",
+  "FAILED",
+]
+
+function StatusFilter({
+  workspaceId,
+  value,
+  onChange,
+}: {
+  workspaceId: string
+  value: DocumentStatus | undefined
+  onChange: (status: DocumentStatus | undefined) => void
+}) {
+  // Counts come from the stats endpoint (already cached by the dashboard).
+  const stats = useQuery({
+    queryKey: queryKeys.stats(workspaceId),
+    queryFn: () => statsApi.get(workspaceId),
+  })
+  const count = (status: DocumentStatus | undefined) =>
+    stats.data
+      ? status
+        ? (stats.data.documents.by_status[status] ?? 0)
+        : stats.data.documents.total
+      : undefined
+
+  return (
+    <div role="group" aria-label="Filter by status" className="flex flex-wrap gap-1.5">
+      {STATUS_FILTERS.map((status) => {
+        const selected = value === status
+        const n = count(status)
+        return (
+          <button
+            key={status ?? "all"}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => onChange(status)}
+            className={cn(
+              "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-sm font-medium text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
+              selected &&
+                "border-foreground/15 bg-foreground text-background hover:bg-foreground/90 hover:text-background",
+            )}
+          >
+            {status ? STATUS_LABELS[status] : "All"}
+            {n !== undefined && (
+              <span
+                className={cn(
+                  "text-xs tabular-nums",
+                  selected ? "text-background/70" : "text-muted-foreground/80",
+                )}
+              >
+                {formatNumber(n)}
+              </span>
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
 export function DocumentsTable({
   workspaceId,
@@ -65,50 +136,33 @@ export function DocumentsTable({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="space-y-1.5">
-          <Label htmlFor="status-filter">Status</Label>
-          <Select
-            value={status ?? "all"}
-            onValueChange={(value) => {
-              setStatus(value === "all" ? undefined : (value as DocumentStatus))
-              setPage(1)
-            }}
-          >
-            <SelectTrigger id="status-filter" className="w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All statuses</SelectItem>
-              {STATUS_OPTIONS.map((option) => (
-                <SelectItem key={option} value={option}>
-                  {STATUS_LABELS[option]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="sort">Sort</Label>
-          <Select
-            value={sort}
-            onValueChange={(value) => {
-              setSort(value as DocumentSort)
-              setPage(1)
-            }}
-          >
-            <SelectTrigger id="sort" className="w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SORT_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <StatusFilter
+          workspaceId={workspaceId}
+          value={status}
+          onChange={(value) => {
+            setStatus(value)
+            setPage(1)
+          }}
+        />
+        <Select
+          value={sort}
+          onValueChange={(value) => {
+            setSort(value as DocumentSort)
+            setPage(1)
+          }}
+        >
+          <SelectTrigger aria-label="Sort documents" className="w-full sm:w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SORT_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {documents.isPending && <ListSkeleton label="Loading documents" />}
@@ -136,17 +190,16 @@ export function DocumentsTable({
       )}
       {documents.isSuccess && documents.data.items.length > 0 && (
         <>
-          <div className="rounded-lg border bg-card">
+          <div className="overflow-hidden rounded-xl border bg-card shadow-xs">
             <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="hidden md:table-cell">Size</TableHead>
-                  <TableHead className="hidden md:table-cell">Pages</TableHead>
+                <TableRow className="bg-muted/40 hover:bg-muted/40">
+                  <TableHead className="pl-4">Name</TableHead>
+                  <TableHead className="hidden sm:table-cell">Status</TableHead>
+                  <TableHead className="hidden md:table-cell">Passages</TableHead>
                   <TableHead className="hidden lg:table-cell">Uploaded</TableHead>
                   {canDelete && (
-                    <TableHead>
+                    <TableHead className="w-12 pr-4">
                       <span className="sr-only">Actions</span>
                     </TableHead>
                   )}
@@ -154,37 +207,56 @@ export function DocumentsTable({
               </TableHeader>
               <TableBody>
                 {documents.data.items.map((document) => (
-                  <TableRow key={document.id}>
-                    <TableCell className="max-w-72">
-                      <Link
-                        href={`/knowledge/${document.id}`}
-                        className="block truncate font-medium hover:underline"
-                      >
-                        {document.filename}
-                      </Link>
-                      {document.status === "FAILED" && document.error_message && (
-                        <p
-                          className="truncate text-xs text-destructive"
-                          title={document.error_message}
-                        >
-                          {document.error_message}
-                        </p>
-                      )}
+                  <TableRow key={document.id} className="group/row">
+                    <TableCell className="max-w-0 py-3 pl-4 sm:max-w-80">
+                      <div className="flex items-center gap-3">
+                        <FileTypeIcon
+                          filename={document.filename}
+                          contentType={document.content_type}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <Link
+                            href={`/knowledge/${document.id}`}
+                            className="block truncate font-medium outline-none hover:underline focus-visible:underline"
+                          >
+                            {document.filename}
+                          </Link>
+                          {document.status === "FAILED" && document.error_message ? (
+                            <p
+                              className="truncate text-xs text-destructive"
+                              title={document.error_message}
+                            >
+                              {document.error_message}
+                            </p>
+                          ) : (
+                            <p className="truncate text-xs text-muted-foreground">
+                              {FILE_KIND_LABELS[fileKind(document.filename, document.content_type)]}{" "}
+                              · {formatBytes(document.size_bytes)}
+                              {document.page_count
+                                ? ` · ${plural(document.page_count, "page")}`
+                                : ""}
+                            </p>
+                          )}
+                          <StatusBadge status={document.status} className="mt-1.5 sm:hidden" />
+                        </div>
+                      </div>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="hidden sm:table-cell">
                       <StatusBadge status={document.status} />
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground tabular-nums md:table-cell">
-                      {formatBytes(document.size_bytes)}
+                      {document.chunk_count ?? "—"}
                     </TableCell>
-                    <TableCell className="hidden text-muted-foreground tabular-nums md:table-cell">
-                      {document.page_count ?? "—"}
-                    </TableCell>
-                    <TableCell className="hidden text-muted-foreground lg:table-cell">
-                      {formatDateTime(document.created_at)}
+                    <TableCell className="hidden lg:table-cell">
+                      <span className="block text-sm" title={formatDateTime(document.created_at)}>
+                        {formatRelative(document.created_at)}
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        {document.uploaded_by_name ?? "Former member"}
+                      </span>
                     </TableCell>
                     {canDelete && (
-                      <TableCell className="text-right">
+                      <TableCell className="pr-4 text-right">
                         <DeleteDocumentDialog workspaceId={workspaceId} document={document} />
                       </TableCell>
                     )}

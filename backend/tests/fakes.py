@@ -1,4 +1,4 @@
-"""Test doubles for external boundaries only (embedding provider, job queue, document store).
+"""Test doubles for external boundaries only (embedding provider, LLM, job queue, document store).
 
 Nothing here is used by application code.
 """
@@ -7,14 +7,16 @@ import hashlib
 import math
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from app.ai.embeddings import EmbeddingError
+from app.ai.llm import LLMMessage, LLMResult
 from app.models.enums import DocumentStatus
 from app.rag.chunking import Chunk
 from app.services.document_processing import ClaimedDocument
-from app.services.queue import ProcessDocumentJob
+from app.services.queue import AgentRunJob, ProcessDocumentJob
 
 TEST_DIMENSIONS = 64
 
@@ -63,9 +65,38 @@ class FakeEmbedder:
         return self.vector(text)
 
 
+Reply = str | Exception
+
+
+class FakeLLM:
+    """Scripted model. `reply` is a fixed answer, a list consumed in order, or a function of
+    the messages (e.g. routing on the system prompt). Records every call."""
+
+    def __init__(
+        self, reply: Reply | list[Reply] | Callable[[list[LLMMessage]], Reply] = "Answer [1]."
+    ) -> None:
+        self.reply = reply
+        self.calls: list[list[LLMMessage]] = []
+
+    async def complete(
+        self, messages: list[LLMMessage], *, max_tokens: int, json_mode: bool = False
+    ) -> LLMResult:
+        self.calls.append(messages)
+        if callable(self.reply):
+            reply = self.reply(messages)
+        elif isinstance(self.reply, list):
+            reply = self.reply.pop(0)
+        else:
+            reply = self.reply
+        if isinstance(reply, Exception):
+            raise reply
+        return LLMResult(text=reply, prompt_tokens=100, completion_tokens=20)
+
+
 class RecordingJobQueue:
     def __init__(self, error: Exception | None = None) -> None:
         self.jobs: list[ProcessDocumentJob] = []
+        self.agent_jobs: list[AgentRunJob] = []
         self.error = error
 
     async def enqueue_document_processing(self, job: ProcessDocumentJob) -> bool:
@@ -74,6 +105,14 @@ class RecordingJobQueue:
         if any(queued.document_id == job.document_id for queued in self.jobs):
             return False
         self.jobs.append(job)
+        return True
+
+    async def enqueue_agent_run(self, job: AgentRunJob) -> bool:
+        if self.error is not None:
+            raise self.error
+        if any(queued.run_id == job.run_id for queued in self.agent_jobs):
+            return False
+        self.agent_jobs.append(job)
         return True
 
 
@@ -92,8 +131,8 @@ class StoredDocument:
 
 
 class InMemoryDocumentStore:
-    """Mirrors SqlDocumentStore's transition rules; the SQL version is covered by
-    tests/integration/test_worker_pipeline.py against PostgreSQL."""
+    """Mirrors MongoDocumentStore's transition rules; the MongoDB version is covered by
+    tests/integration/test_worker_pipeline.py against MongoDB Atlas."""
 
     def __init__(self) -> None:
         self.documents: dict[uuid.UUID, StoredDocument] = {}

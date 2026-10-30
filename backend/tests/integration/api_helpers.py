@@ -3,8 +3,10 @@ from dataclasses import dataclass
 
 from httpx import AsyncClient
 
+from app.ai.retrieval import KnowledgeRetriever
 from app.rag.indexing import VectorIndex
-from app.repositories.document_store import SqlDocumentStore
+from app.repositories.document_store import MongoDocumentStore
+from app.services.agent import AgentRunner
 from app.services.document_processing import DocumentProcessor, Outcome
 from tests.integration.conftest import Api
 
@@ -53,10 +55,10 @@ async def upload(
 
 
 async def run_queued_jobs(api: Api) -> list[Outcome]:
-    """Process every recorded job with the real worker pipeline (PostgreSQL store, local
+    """Process every recorded job with the real worker pipeline (MongoDB Atlas store, local
     storage, Qdrant client), as the arq worker would."""
     processor = DocumentProcessor(
-        store=SqlDocumentStore(api.session_factory),
+        store=MongoDocumentStore(api.mongo),
         storage=api.storage,
         embedder=api.embedder,
         index=VectorIndex(api.qdrant),
@@ -66,3 +68,21 @@ async def run_queued_jobs(api: Api) -> list[Outcome]:
     outcomes = [await processor.process(job) for job in api.queue.jobs]
     api.queue.jobs.clear()
     return outcomes
+
+
+async def run_agent_jobs(api: Api) -> list[str]:
+    """Execute every queued agent run with the real runner and graph, as the worker would."""
+    runner = AgentRunner(
+        api.mongo,
+        KnowledgeRetriever(
+            api.embedder,
+            api.qdrant,
+            top_k=api.settings.retrieval_top_k,
+            score_threshold=api.settings.retrieval_score_threshold,
+        ),
+        api.llm,
+        api.settings,
+    )
+    statuses = [await runner.run(job) for job in api.queue.agent_jobs]
+    api.queue.agent_jobs.clear()
+    return statuses

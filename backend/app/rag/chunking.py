@@ -45,7 +45,7 @@ def chunk_id(document_id: uuid.UUID, index: int) -> uuid.UUID:
 
 
 @lru_cache
-def _encoding() -> tiktoken.Encoding:
+def token_encoding() -> tiktoken.Encoding:
     return tiktoken.get_encoding(ENCODING_NAME)
 
 
@@ -73,7 +73,7 @@ def chunk_pages(pages: list[Page], document_id: uuid.UUID) -> list[Chunk]:
                     index=index,
                     page=page.number,
                     text=piece,
-                    token_count=len(_encoding().encode(piece)),
+                    token_count=len(token_encoding().encode(piece)),
                 )
             )
     if not chunks:

@@ -1,0 +1,48 @@
+[
+  {
+    "_id": {
+      "$uuid": "b78cb038-9c09-5963-9f33-533b8e2d48d4"
+    },
+    "conversation_id": {
+      "$uuid": "abb286d7-cb0c-5fa1-a40f-5e44700dca96"
+    },
+    "workspace_id": {
+      "$uuid": "879886d8-6441-5a65-9d44-40268f6de906"
+    },
+    "role": "user",
+    "content": "What documents are normally required for customs clearance?",
+    "sources": [],
+    "insufficient_context": false,
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "created_at": {
+      "$date": "2026-09-01T09:20:00Z"
+    },
+    "updated_at": {
+      "$date": "2026-09-01T09:20:00Z"
+    }
+  },
+  {
+    "_id": {
+      "$uuid": "9d1fb38c-b77a-54e9-9b55-c93dbc8c49f6"
+    },
+    "conversation_id": {
+      "$uuid": "abb286d7-cb0c-5fa1-a40f-5e44700dca96"
+    },
+    "workspace_id": {
+      "$uuid": "879886d8-6441-5a65-9d44-40268f6de906"
+    },
+    "role": "assistant",
+    "content": "This is a development/demo response. Refer to the connected knowledge base for verified information.",
+    "sources": [],
+    "insufficient_context": false,
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "created_at": {
+      "$date": "2026-09-01T09:21:00Z"
+    },
+    "updated_at": {
+      "$date": "2026-09-01T09:21:00Z"
+    }
+  }
+]

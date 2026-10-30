@@ -25,7 +25,9 @@ def settings() -> Settings:
         _env_file=None,
         environment="test",
         allowed_origins="http://localhost:3000",
-        database_url="postgresql+asyncpg://test:test@localhost:5432/test",
+        # Never contacted: unit/API tests don't run the lifespan.
+        mongodb_uri="mongodb://localhost:1/unused",
+        mongodb_database="copilot_unit",
         redis_url="redis://localhost:6379/0",
         qdrant_url="http://localhost:6333",
         jwt_secret_key=TEST_JWT_SECRET,

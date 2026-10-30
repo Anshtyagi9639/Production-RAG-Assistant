@@ -1,18 +1,21 @@
-"""All ORM models, imported here so `Base.metadata` is complete for Alembic."""
+"""Application records (MongoDB). Collections and indexes live in app/db/mongo_schema.py."""
 
-from app.models.activity_log import ActivityLog
-from app.models.agent_run import AgentRun
-from app.models.conversation import Conversation, Message
-from app.models.document import Document, DocumentChunk
-from app.models.user import User
-from app.models.workspace import Workspace, WorkspaceMember
+from app.models.records import (
+    ActivityLog,
+    AgentRun,
+    Conversation,
+    Document,
+    Message,
+    User,
+    Workspace,
+    WorkspaceMember,
+)
 
 __all__ = [
     "ActivityLog",
     "AgentRun",
     "Conversation",
     "Document",
-    "DocumentChunk",
     "Message",
     "User",
     "Workspace",

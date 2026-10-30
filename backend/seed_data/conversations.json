@@ -1,0 +1,20 @@
+[
+  {
+    "_id": {
+      "$uuid": "abb286d7-cb0c-5fa1-a40f-5e44700dca96"
+    },
+    "workspace_id": {
+      "$uuid": "879886d8-6441-5a65-9d44-40268f6de906"
+    },
+    "user_id": {
+      "$uuid": "b4eef2a4-dae5-561a-901c-513f291f01de"
+    },
+    "title": "Customs Demo Conversation",
+    "created_at": {
+      "$date": "2026-09-01T09:20:00Z"
+    },
+    "updated_at": {
+      "$date": "2026-09-01T09:20:00Z"
+    }
+  }
+]

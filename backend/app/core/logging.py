@@ -3,6 +3,8 @@ import logging
 import re
 import sys
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
@@ -11,7 +13,7 @@ from uuid import uuid4
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.core.errors import error_response
+from app.core.errors import AppError, error_response
 
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 
@@ -48,6 +50,44 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
+@contextmanager
+def timed_stage(log: logging.Logger, operation: str, stage: str, **fields: Any) -> Iterator[None]:
+    """Log one step of an operation with its duration (the request ID is added by the formatter).
+
+    Expected outcomes (an AppError such as wrong credentials) are logged at INFO with their
+    code; anything else at WARNING with the exception type and, for database errors, the
+    server's error code. Never pass secrets, credentials or tokens in `fields`.
+    """
+    started = time.perf_counter()
+    base = {"operation": operation, "stage": stage, **fields}
+    try:
+        yield
+    except AppError as exc:
+        log.info("stage_outcome", extra={**base, "outcome": exc.code, "duration_ms": _ms(started)})
+        raise
+    except Exception as exc:
+        log.warning(
+            "stage_failed",
+            extra={
+                **base,
+                "error": type(exc).__name__,
+                "error_code": getattr(exc, "code", None),
+                "duration_ms": _ms(started),
+            },
+        )
+        raise
+    log.info("stage_completed", extra={**base, "duration_ms": _ms(started)})
+
+
+def _ms(started: float) -> float:
+    return round((time.perf_counter() - started) * 1000, 1)
+
+
+def email_domain(email: str) -> str:
+    """The part of an address that is safe to log."""
+    return email.rsplit("@", 1)[-1].lower() if "@" in email else "invalid"
+
+
 def configure_logging(level: str) -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
@@ -59,6 +99,10 @@ def configure_logging(level: str) -> None:
         logging.getLogger(name).handlers = []
         logging.getLogger(name).propagate = True
     logging.getLogger("uvicorn.access").disabled = True
+    # The HTTP clients behind Qdrant and OpenAI log every request URL at INFO, which puts the
+    # cloud endpoints in the logs on each call. Keep their warnings and errors only.
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 class RequestContextMiddleware:

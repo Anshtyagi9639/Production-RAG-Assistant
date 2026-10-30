@@ -1,9 +1,10 @@
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from pymongo import ReturnDocument
 
-from app.models import ActivityLog, Document, DocumentChunk
+from app.db.mongo import Mongo, Session
+from app.models import ActivityLog
 from app.models.enums import DocumentStatus
 from app.rag.chunking import Chunk
 from app.services.document_processing import ClaimedDocument
@@ -12,99 +13,139 @@ from app.services.queue import ProcessDocumentJob
 MAX_REASON_LENGTH = 1000
 
 
-class SqlDocumentStore:
-    """The worker's PostgreSQL status transitions, each in its own short transaction.
+def _now() -> datetime:
+    return datetime.now(UTC)
 
-    Rows are locked with SELECT ... FOR UPDATE so a concurrent delete or a duplicate job
-    can't interleave with a transition.
+
+class MongoDocumentStore:
+    """The worker's status transitions in MongoDB.
+
+    `claim` is a single atomic find-and-update; `complete` and `fail` are transactions, so a
+    concurrent delete or a duplicate job can't interleave with a transition.
     """
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
-        self._session_factory = session_factory
-
-    @staticmethod
-    async def _locked(
-        session: AsyncSession, document: ClaimedDocument | ProcessDocumentJob
-    ) -> Document | None:
-        document_id = document.id if isinstance(document, ClaimedDocument) else document.document_id
-        row: Document | None = await session.scalar(
-            select(Document)
-            .where(Document.id == document_id, Document.workspace_id == document.workspace_id)
-            .with_for_update()
-        )
-        return row
+    def __init__(self, mongo: Mongo) -> None:
+        self._mongo = mongo
+        self._documents = mongo.db["documents"]
+        self._chunks = mongo.db["document_chunks"]
+        self._activity = mongo.db["activity_logs"]
 
     async def claim(self, job: ProcessDocumentJob) -> ClaimedDocument | None:
-        async with self._session_factory() as session, session.begin():
-            document = await self._locked(session, job)
-            # PROCESSING is claimable so a job retried after a worker crash can finish.
-            if document is None or document.status not in {
-                DocumentStatus.UPLOADED,
-                DocumentStatus.PROCESSING,
-            }:
-                return None
-            document.status = DocumentStatus.PROCESSING
-            document.error_message = None
-            return ClaimedDocument(
-                id=document.id,
-                workspace_id=document.workspace_id,
-                filename=document.filename,
-                storage_key=document.storage_key,
-                created_at=document.created_at,
-            )
+        # PROCESSING is claimable so a job retried after a worker crash can finish.
+        document = await self._documents.find_one_and_update(
+            {
+                "_id": job.document_id,
+                "workspace_id": job.workspace_id,
+                "status": {"$in": [DocumentStatus.UPLOADED.value, DocumentStatus.PROCESSING.value]},
+            },
+            {
+                "$set": {
+                    "status": DocumentStatus.PROCESSING.value,
+                    "error_message": None,
+                    "updated_at": _now(),
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        if document is None:
+            return None
+        return ClaimedDocument(
+            id=document["_id"],
+            workspace_id=document["workspace_id"],
+            filename=document["filename"],
+            storage_key=document["storage_key"],
+            created_at=document["created_at"],
+        )
+
+    def _activity_entry(
+        self, document: ClaimedDocument, action: str, details: dict[str, Any]
+    ) -> dict[str, Any]:
+        return ActivityLog(
+            workspace_id=document.workspace_id,
+            user_id=None,
+            action=action,
+            entity_type="document",
+            entity_id=document.id,
+            details=details,
+        ).to_document()
 
     async def complete(
         self, document: ClaimedDocument, chunks: list[Chunk], page_count: int | None
     ) -> bool:
-        async with self._session_factory() as session, session.begin():
-            row = await self._locked(session, document)
-            if row is None:
-                return False
-            await session.execute(
-                delete(DocumentChunk).where(DocumentChunk.document_id == document.id)
+        async def work(session: Session) -> bool:
+            now = _now()
+            result = await self._documents.update_one(
+                {"_id": document.id, "workspace_id": document.workspace_id},
+                {
+                    "$set": {
+                        "status": DocumentStatus.COMPLETED.value,
+                        "error_message": None,
+                        "page_count": page_count,
+                        "chunk_count": len(chunks),
+                        "processed_at": now,
+                        "updated_at": now,
+                    }
+                },
+                session=session,
             )
-            session.add_all(
-                DocumentChunk(
-                    id=chunk.id,
-                    document_id=document.id,
-                    workspace_id=document.workspace_id,
-                    chunk_index=chunk.index,
-                    page=chunk.page,
-                    text=chunk.text,
-                    token_count=chunk.token_count,
+            if result.matched_count == 0:
+                return False  # deleted while processing
+            await self._chunks.delete_many({"document_id": document.id}, session=session)
+            if chunks:
+                await self._chunks.insert_many(
+                    [
+                        {
+                            "_id": chunk.id,
+                            "document_id": document.id,
+                            "workspace_id": document.workspace_id,
+                            "chunk_index": chunk.index,
+                            "page": chunk.page,
+                            "text": chunk.text,
+                            "token_count": chunk.token_count,
+                            "created_at": now,
+                            "updated_at": now,
+                        }
+                        for chunk in chunks
+                    ],
+                    session=session,
                 )
-                for chunk in chunks
-            )
-            row.status = DocumentStatus.COMPLETED
-            row.error_message = None
-            row.page_count = page_count
-            row.chunk_count = len(chunks)
-            row.processed_at = datetime.now(UTC)
-            session.add(
-                ActivityLog(
-                    workspace_id=document.workspace_id,
-                    action="document.processed",
-                    entity_type="document",
-                    entity_id=document.id,
-                    details={"filename": document.filename, "chunks": len(chunks)},
-                )
+            await self._activity.insert_one(
+                self._activity_entry(
+                    document,
+                    "document.processed",
+                    {"filename": document.filename, "chunks": len(chunks)},
+                ),
+                session=session,
             )
             return True
 
+        return await self._mongo.transaction(work)
+
     async def fail(self, document: ClaimedDocument, reason: str) -> None:
-        async with self._session_factory() as session, session.begin():
-            row = await self._locked(session, document)
-            if row is None:
-                return
-            row.status = DocumentStatus.FAILED
-            row.error_message = reason[:MAX_REASON_LENGTH]
-            row.processed_at = datetime.now(UTC)
-            session.add(
-                ActivityLog(
-                    workspace_id=document.workspace_id,
-                    action="document.failed",
-                    entity_type="document",
-                    entity_id=document.id,
-                    details={"filename": document.filename, "reason": row.error_message},
-                )
+        reason = reason[:MAX_REASON_LENGTH]
+
+        async def work(session: Session) -> None:
+            now = _now()
+            result = await self._documents.update_one(
+                {"_id": document.id, "workspace_id": document.workspace_id},
+                {
+                    "$set": {
+                        "status": DocumentStatus.FAILED.value,
+                        "error_message": reason,
+                        "processed_at": now,
+                        "updated_at": now,
+                    }
+                },
+                session=session,
             )
+            if result.matched_count:
+                await self._activity.insert_one(
+                    self._activity_entry(
+                        document,
+                        "document.failed",
+                        {"filename": document.filename, "reason": reason},
+                    ),
+                    session=session,
+                )
+
+        await self._mongo.transaction(work)

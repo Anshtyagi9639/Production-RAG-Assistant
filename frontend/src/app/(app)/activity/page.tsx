@@ -9,7 +9,6 @@ import { useWorkspace } from "@/components/app/workspace-context"
 import { PageHeader } from "@/components/page-header"
 import { Pagination } from "@/components/pagination"
 import { EmptyState, ErrorState, ListSkeleton } from "@/components/states"
-import { Card, CardContent } from "@/components/ui/card"
 import { activityApi } from "@/lib/api/endpoints"
 import { queryKeys } from "@/lib/query-keys"
 
@@ -28,10 +27,10 @@ export default function ActivityPage() {
     <>
       <PageHeader
         title="Activity"
-        description="Everything that happened in this workspace, newest first."
+        description="An audit trail of uploads, processing, questions and agent runs in this workspace, newest first."
       />
-      <Card>
-        <CardContent>
+      <section className="rounded-xl border bg-card p-4 shadow-xs sm:p-5" aria-label="Activity">
+        <div>
           {activity.isPending && <ListSkeleton rows={8} label="Loading activity" />}
           {activity.isError && (
             <ErrorState
@@ -49,12 +48,12 @@ export default function ActivityPage() {
           )}
           {activity.isSuccess && activity.data.items.length > 0 && (
             <>
-              <ActivityList entries={activity.data.items} />
+              <ActivityList entries={activity.data.items} grouped />
               <Pagination page={page} pages={activity.data.pages} onPageChange={setPage} />
             </>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </>
   )
 }

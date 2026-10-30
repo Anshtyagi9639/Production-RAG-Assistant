@@ -5,20 +5,19 @@ from collections.abc import Awaitable, Callable, Mapping
 
 from qdrant_client import AsyncQdrantClient
 from redis.asyncio import Redis
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
 
-from app.schemas.health import ComponentHealth, HealthReport
+from app.core.errors import is_database_auth_failure
+from app.db.mongo import Mongo
+from app.schemas.health import ComponentHealth, HealthError, HealthReport
 
 HealthCheck = Callable[[], Awaitable[object]]
 
 logger = logging.getLogger(__name__)
 
 
-def postgres_check(engine: AsyncEngine) -> HealthCheck:
+def mongodb_check(mongo: Mongo) -> HealthCheck:
     async def check() -> None:
-        async with engine.connect() as connection:
-            await connection.execute(text("SELECT 1"))
+        await mongo.db.command("ping")
 
     return check
 
@@ -61,7 +60,12 @@ class HealthService:
             logger.warning(
                 "health_check_failed", extra={"component": name, "error": type(exc).__name__}
             )
-            error = "timeout" if isinstance(exc, TimeoutError) else "unreachable"
+            if isinstance(exc, TimeoutError):
+                error: HealthError = "timeout"
+            elif is_database_auth_failure(exc):
+                error = "authentication_failed"
+            else:
+                error = "unreachable"
             return ComponentHealth(status="unavailable", latency_ms=latency_ms, error=error)
         return ComponentHealth(status="ok", latency_ms=_elapsed_ms(started))
 

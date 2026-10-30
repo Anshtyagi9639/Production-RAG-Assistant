@@ -1,11 +1,10 @@
 import logging
 import uuid
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.config import Settings
 from app.core.errors import AppError, UserFacingError
 from app.core.pagination import Page, PageParams
+from app.db.mongo import Mongo, Session
 from app.models import Document, User
 from app.models.enums import DocumentStatus
 from app.rag.indexing import VectorIndex
@@ -24,19 +23,19 @@ DOCUMENT_NOT_FOUND = AppError(404, "document_not_found", "Document not found.")
 class DocumentService:
     def __init__(
         self,
-        session: AsyncSession,
+        mongo: Mongo,
         settings: Settings,
         storage: Storage,
-        queue: JobQueue,
+        queue: JobQueue | None,
         index: VectorIndex,
     ) -> None:
-        self._session = session
+        self._mongo = mongo
         self._settings = settings
         self._storage = storage
         self._queue = queue
         self._index = index
-        self._documents = DocumentRepository(session)
-        self._activity = ActivityRepository(session)
+        self._documents = DocumentRepository(mongo.db)
+        self._activity = ActivityRepository(mongo.db)
 
     async def upload(
         self, user: User, workspace_id: uuid.UUID, filename: str | None, data: bytes
@@ -45,6 +44,16 @@ class DocumentService:
 
         Extraction, chunking, embedding and indexing happen later in the worker.
         """
+        if self._queue is None:
+            # No job queue (arq not installed): refuse before storing anything, so no document
+            # is left UPLOADED with nothing to process it.
+            raise AppError(
+                503,
+                "processing_unavailable",
+                "Document processing is unavailable on this server (background job queue is "
+                "not configured).",
+            )
+        queue = self._queue
         upload = validate_upload(filename, data, self._settings.max_upload_bytes)
         # The stored name is random: user-supplied names never reach the filesystem or bucket.
         storage_key = f"{uuid.uuid4().hex}{upload.extension}"
@@ -57,35 +66,35 @@ class DocumentService:
             storage_key=storage_key,
             content_type=upload.content_type,
             size_bytes=len(upload.data),
-            status=DocumentStatus.UPLOADED,
         )
-        try:
-            self._documents.add(document)
-            await self._session.flush()
-            self._activity.record(
+
+        async def work(session: Session) -> None:
+            await self._documents.insert(document, session)
+            await self._activity.record(
                 workspace_id=workspace_id,
                 user_id=user.id,
                 action="document.uploaded",
                 entity_type="document",
                 entity_id=document.id,
                 details={"filename": document.filename},
+                session=session,
             )
-            await self._session.commit()
-        except Exception:
-            await self._session.rollback()
-            await self._storage.delete(storage_key)
-            raise
-        await self._session.refresh(document)
 
         try:
-            await self._queue.enqueue_document_processing(
+            await self._mongo.transaction(work)
+        except Exception:
+            await self._storage.delete(storage_key)
+            raise
+
+        try:
+            await queue.enqueue_document_processing(
                 ProcessDocumentJob(document_id=document.id, workspace_id=workspace_id)
             )
         except Exception as exc:
             logger.exception("enqueue_failed", extra={"document_id": str(document.id)})
-            document.status = DocumentStatus.FAILED
-            document.error_message = "Processing could not be queued. Upload the file again."
-            await self._session.commit()
+            await self._documents.mark_failed(
+                document, "Processing could not be queued. Upload the file again."
+            )
             raise AppError(
                 503, "queue_unavailable", "The processing queue is unavailable. Try again later."
             ) from exc
@@ -123,19 +132,21 @@ class DocumentService:
                 503, "index_unavailable", "The search index is unavailable. Try again later."
             ) from exc
 
-        storage_key, filename = document.storage_key, document.filename
-        await self._documents.delete(document)
-        self._activity.record(
-            workspace_id=workspace_id,
-            user_id=user.id,
-            action="document.deleted",
-            entity_type="document",
-            entity_id=document_id,
-            details={"filename": filename},
-        )
-        await self._session.commit()
+        async def work(session: Session) -> None:
+            await self._documents.delete(document, session)
+            await self._activity.record(
+                workspace_id=workspace_id,
+                user_id=user.id,
+                action="document.deleted",
+                entity_type="document",
+                entity_id=document_id,
+                details={"filename": document.filename},
+                session=session,
+            )
+
+        await self._mongo.transaction(work)
         try:
-            await self._storage.delete(storage_key)
+            await self._storage.delete(document.storage_key)
         except Exception:
-            # The row is gone; an orphaned file is harmless and is logged for cleanup.
+            # The record is gone; an orphaned file is harmless and is logged for cleanup.
             logger.exception("stored_file_not_deleted", extra={"document_id": str(document_id)})

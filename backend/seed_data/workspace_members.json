@@ -1,0 +1,56 @@
+[
+  {
+    "_id": {
+      "$uuid": "58e9ce78-0250-5ffa-bfee-3b1ba0597174"
+    },
+    "workspace_id": {
+      "$uuid": "879886d8-6441-5a65-9d44-40268f6de906"
+    },
+    "user_id": {
+      "$uuid": "b4eef2a4-dae5-561a-901c-513f291f01de"
+    },
+    "role": "owner",
+    "created_at": {
+      "$date": "2026-09-01T09:02:00Z"
+    },
+    "updated_at": {
+      "$date": "2026-09-01T09:02:00Z"
+    }
+  },
+  {
+    "_id": {
+      "$uuid": "f0c3fe67-f0d4-5b59-aa47-b934cf37db2f"
+    },
+    "workspace_id": {
+      "$uuid": "879886d8-6441-5a65-9d44-40268f6de906"
+    },
+    "user_id": {
+      "$uuid": "a221f914-58bf-5479-956c-8bd192baf3fc"
+    },
+    "role": "member",
+    "created_at": {
+      "$date": "2026-09-01T09:04:00Z"
+    },
+    "updated_at": {
+      "$date": "2026-09-01T09:04:00Z"
+    }
+  },
+  {
+    "_id": {
+      "$uuid": "1994d9fb-e9f0-541b-86f1-6ae362c2b6d4"
+    },
+    "workspace_id": {
+      "$uuid": "5b8eea89-5635-5551-8f2e-172f811d15c4"
+    },
+    "user_id": {
+      "$uuid": "a221f914-58bf-5479-956c-8bd192baf3fc"
+    },
+    "role": "owner",
+    "created_at": {
+      "$date": "2026-09-01T09:03:00Z"
+    },
+    "updated_at": {
+      "$date": "2026-09-01T09:03:00Z"
+    }
+  }
+]

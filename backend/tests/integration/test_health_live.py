@@ -20,7 +20,7 @@ async def test_health_is_green_against_real_services() -> None:
     body = response.json()
     assert body["status"] == "ok"
     assert {name: check["status"] for name, check in body["checks"].items()} == {
-        "postgres": "ok",
+        "mongodb": "ok",
         "redis": "ok",
         "qdrant": "ok",
     }

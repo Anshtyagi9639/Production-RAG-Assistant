@@ -1,22 +1,8 @@
+# Optional: the app runs without Docker. The database is MongoDB Atlas (MONGODB_URI in .env);
+# there is no database container.
 name: copilot
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-copilot}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (copy .env.example)}
-      POSTGRES_DB: ${POSTGRES_DB:-copilot}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   redis:
     image: redis:7.4-alpine
     volumes:
@@ -48,11 +34,11 @@ services:
 
   backend:
     build: ./backend
+    # MONGODB_URI and MONGODB_DATABASE come from .env.
     env_file: &backend-env-file
       - path: .env
         required: false
     environment: &backend-environment
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-copilot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-copilot}
       REDIS_URL: redis://redis:6379/0
       QDRANT_URL: http://qdrant:6333
       STORAGE_LOCAL_PATH: /data/uploads
@@ -62,8 +48,6 @@ services:
     ports:
       - "8000:8000"
     depends_on: &backend-depends-on
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       qdrant:
@@ -115,6 +99,5 @@ services:
 
 volumes:
   uploads:
-  postgres_data:
   redis_data:
   qdrant_data:

@@ -93,6 +93,8 @@ export interface Source {
 export interface SearchRequest {
   query: string
   top_k?: number
+  /** Restrict the search to these documents (still within the current workspace). */
+  document_ids?: string[]
 }
 
 export interface SearchResult {

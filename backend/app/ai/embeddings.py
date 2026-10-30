@@ -10,10 +10,13 @@ from pydantic import SecretStr
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
+from app.ai.http import create_openai_http_client
 from app.core.config import Settings
 from app.core.errors import UserFacingError
 
 logger = logging.getLogger(__name__)
+
+EMBEDDING_TIMEOUT_SECONDS = 30
 
 
 class EmbeddingError(UserFacingError):
@@ -48,7 +51,8 @@ class OpenAIEmbedder:
                 openai_api_key=SecretStr(api_key),
                 # Retries are handled by embed_in_batches, with backoff we control and test.
                 max_retries=0,
-                request_timeout=30,
+                request_timeout=EMBEDDING_TIMEOUT_SECONDS,
+                http_async_client=create_openai_http_client(EMBEDDING_TIMEOUT_SECONDS),
             )
             if api_key
             else None

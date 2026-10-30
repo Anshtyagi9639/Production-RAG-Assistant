@@ -1,9 +1,7 @@
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.db.mongo import Database, Session
 from app.models import Workspace, WorkspaceMember
 from app.models.enums import WorkspaceRole
 
@@ -15,42 +13,46 @@ class Membership:
 
 
 class WorkspaceRepository:
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+    def __init__(self, db: Database) -> None:
+        self._workspaces = db["workspaces"]
+        self._members = db["workspace_members"]
 
-    def add(self, workspace: Workspace) -> None:
-        self._session.add(workspace)
+    async def insert(self, workspace: Workspace, session: Session | None = None) -> None:
+        await self._workspaces.insert_one(workspace.to_document(), session=session)
 
-    def add_member(self, member: WorkspaceMember) -> None:
-        self._session.add(member)
+    async def insert_member(self, member: WorkspaceMember, session: Session | None = None) -> None:
+        await self._members.insert_one(member.to_document(), session=session)
 
     async def list_for_user(self, user_id: uuid.UUID) -> list[Membership]:
-        rows = await self._session.execute(
-            select(Workspace, WorkspaceMember.role)
-            .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
-            .where(WorkspaceMember.user_id == user_id)
-            .order_by(Workspace.created_at, Workspace.id)
+        roles = {
+            document["workspace_id"]: WorkspaceRole(document["role"])
+            async for document in self._members.find({"user_id": user_id})
+        }
+        if not roles:
+            return []
+        cursor = self._workspaces.find({"_id": {"$in": list(roles)}}).sort(
+            [("created_at", 1), ("_id", 1)]
         )
-        return [Membership(workspace, role) for workspace, role in rows.tuples()]
+        return [
+            Membership(Workspace.from_document(document), roles[document["_id"]])
+            async for document in cursor
+        ]
 
     async def get_membership(
         self, user_id: uuid.UUID, workspace_id: uuid.UUID
     ) -> Membership | None:
-        row = (
-            await self._session.execute(
-                select(Workspace, WorkspaceMember.role)
-                .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
-                .where(Workspace.id == workspace_id, WorkspaceMember.user_id == user_id)
-            )
-        ).first()
-        return Membership(row[0], row[1]) if row else None
+        member = await self._members.find_one({"workspace_id": workspace_id, "user_id": user_id})
+        if member is None:
+            return None
+        workspace = await self._workspaces.find_one({"_id": workspace_id})
+        if workspace is None:
+            return None
+        return Membership(Workspace.from_document(workspace), WorkspaceRole(member["role"]))
 
-    async def get_member_user(
-        self, workspace_id: uuid.UUID, user_id: uuid.UUID
-    ) -> WorkspaceMember | None:
-        member: WorkspaceMember | None = await self._session.scalar(
-            select(WorkspaceMember).where(
-                WorkspaceMember.workspace_id == workspace_id, WorkspaceMember.user_id == user_id
-            )
+    async def is_member(
+        self, workspace_id: uuid.UUID, user_id: uuid.UUID, session: Session | None = None
+    ) -> bool:
+        member = await self._members.find_one(
+            {"workspace_id": workspace_id, "user_id": user_id}, {"_id": 1}, session=session
         )
-        return member
+        return member is not None

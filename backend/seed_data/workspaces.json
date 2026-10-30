@@ -1,0 +1,26 @@
+[
+  {
+    "_id": {
+      "$uuid": "879886d8-6441-5a65-9d44-40268f6de906"
+    },
+    "name": "Production RAG Demo",
+    "created_at": {
+      "$date": "2026-09-01T09:02:00Z"
+    },
+    "updated_at": {
+      "$date": "2026-09-01T09:02:00Z"
+    }
+  },
+  {
+    "_id": {
+      "$uuid": "5b8eea89-5635-5551-8f2e-172f811d15c4"
+    },
+    "name": "Member Sandbox",
+    "created_at": {
+      "$date": "2026-09-01T09:03:00Z"
+    },
+    "updated_at": {
+      "$date": "2026-09-01T09:03:00Z"
+    }
+  }
+]

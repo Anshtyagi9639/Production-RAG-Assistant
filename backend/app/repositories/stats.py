@@ -1,64 +1,45 @@
 import uuid
+from typing import Any
 
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models import AgentRun, Conversation, Document, Message
+from app.db.mongo import Database
 from app.models.enums import DocumentStatus
 
 
 class StatsRepository:
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+    def __init__(self, db: Database) -> None:
+        self._db = db
 
     async def documents_by_status(self, workspace_id: uuid.UUID) -> dict[DocumentStatus, int]:
-        rows = await self._session.execute(
-            select(Document.status, func.count())
-            .where(Document.workspace_id == workspace_id)
-            .group_by(Document.status)
-        )
         counts = dict.fromkeys(DocumentStatus, 0)
-        counts.update(dict(rows.tuples().all()))
+        pipeline: list[dict[str, Any]] = [
+            {"$match": {"workspace_id": workspace_id}},
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}},
+        ]
+        async for row in await self._db["documents"].aggregate(pipeline):
+            counts[DocumentStatus(row["_id"])] = row["count"]
         return counts
 
     async def conversation_count(self, workspace_id: uuid.UUID) -> int:
-        return (
-            await self._session.scalar(
-                select(func.count())
-                .select_from(Conversation)
-                .where(Conversation.workspace_id == workspace_id)
-            )
-            or 0
-        )
+        return await self._db["conversations"].count_documents({"workspace_id": workspace_id})
 
     async def agent_run_count(self, workspace_id: uuid.UUID) -> int:
-        return (
-            await self._session.scalar(
-                select(func.count())
-                .select_from(AgentRun)
-                .where(AgentRun.workspace_id == workspace_id)
-            )
-            or 0
-        )
+        return await self._db["agent_runs"].count_documents({"workspace_id": workspace_id})
 
     async def token_totals(self, workspace_id: uuid.UUID) -> tuple[int, int]:
         """(prompt, completion) tokens across chat messages and agent runs in the workspace."""
-        chat = (
-            await self._session.execute(
-                select(
-                    func.coalesce(func.sum(Message.prompt_tokens), 0),
-                    func.coalesce(func.sum(Message.completion_tokens), 0),
-                )
-                .join(Conversation, Conversation.id == Message.conversation_id)
-                .where(Conversation.workspace_id == workspace_id)
-            )
-        ).one()
-        agent = (
-            await self._session.execute(
-                select(
-                    func.coalesce(func.sum(AgentRun.prompt_tokens), 0),
-                    func.coalesce(func.sum(AgentRun.completion_tokens), 0),
-                ).where(AgentRun.workspace_id == workspace_id)
-            )
-        ).one()
-        return int(chat[0]) + int(agent[0]), int(chat[1]) + int(agent[1])
+        prompt = completion = 0
+        pipeline: list[dict[str, Any]] = [
+            {"$match": {"workspace_id": workspace_id}},
+            {
+                "$group": {
+                    "_id": None,
+                    "prompt": {"$sum": "$prompt_tokens"},
+                    "completion": {"$sum": "$completion_tokens"},
+                }
+            },
+        ]
+        for collection in ("messages", "agent_runs"):
+            async for row in await self._db[collection].aggregate(pipeline):
+                prompt += int(row["prompt"])
+                completion += int(row["completion"])
+        return prompt, completion

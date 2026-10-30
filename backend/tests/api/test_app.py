@@ -2,6 +2,7 @@ import re
 
 from fastapi import FastAPI
 from httpx import AsyncClient
+from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
 
 REQUEST_ID = re.compile(r"^[0-9a-f]{32}$")
 
@@ -92,3 +93,57 @@ async def test_swagger_ui_and_openapi_schema_are_served(client: AsyncClient) -> 
     assert docs.status_code == 200
     assert "swagger-ui" in docs.text
     assert "/api/health" in schema.json()["paths"]
+
+
+async def test_database_outage_is_503_without_leaking_hosts(
+    app: FastAPI, client: AsyncClient
+) -> None:
+    async def lookup() -> None:
+        raise ServerSelectionTimeoutError(
+            "ac-xyz-shard-00-00.example.mongodb.net:27017: SSL handshake failed"
+        )
+
+    app.add_api_route("/api/lookup", lookup)
+
+    response = await client.get("/api/lookup")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": {
+            "code": "database_unavailable",
+            "message": "The service is temporarily unavailable. Please try again in a few minutes.",
+        }
+    }
+    assert "mongodb.net" not in response.text
+    assert REQUEST_ID.fullmatch(response.headers["X-Request-ID"])
+
+
+async def test_rejected_database_credentials_are_503_without_leaking_details(
+    app: FastAPI, client: AsyncClient
+) -> None:
+    async def lookup() -> None:
+        raise OperationFailure("bad auth : authentication failed for user ana", code=8000)
+
+    app.add_api_route("/api/auth-lookup", lookup)
+
+    response = await client.get("/api/auth-lookup")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "database_unavailable"
+    assert "bad auth" not in response.text
+    assert "ana" not in response.text
+
+
+async def test_other_database_errors_are_still_500(app: FastAPI, client: AsyncClient) -> None:
+    async def bad_query() -> None:
+        raise OperationFailure("unknown operator: $foo", code=2)
+
+    app.add_api_route("/api/bad-query", bad_query)
+
+    response = await client.get("/api/bad-query")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": {"code": "internal_error", "message": "An unexpected error occurred."}
+    }
+    assert "$foo" not in response.text

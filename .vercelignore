@@ -1,0 +1,14 @@
+# Never upload local secrets, environments or build output when deploying with the Vercel CLI.
+.env
+.env.*
+!.env.example
+**/.venv
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+backend/storage
+frontend/.next
+frontend/.env.local
+frontend/tsconfig.tsbuildinfo

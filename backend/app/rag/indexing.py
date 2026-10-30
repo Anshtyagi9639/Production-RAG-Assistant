@@ -1,9 +1,12 @@
+import asyncio
 import logging
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 
+import httpx
 from qdrant_client import AsyncQdrantClient
+from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from qdrant_client.models import (
     Distance,
     FieldCondition,
@@ -20,6 +23,8 @@ from app.rag.chunking import Chunk
 
 COLLECTION = "knowledge_chunks"
 UPSERT_BATCH_SIZE = 128
+MAX_ATTEMPTS = 3
+RETRY_BASE_DELAY_SECONDS = 0.5
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +32,32 @@ logger = logging.getLogger(__name__)
 class VectorIndexError(UserFacingError):
     def __init__(self) -> None:
         super().__init__("The search index is unavailable. Try again later.")
+
+
+def is_transient(exc: Exception) -> bool:
+    """Network failures, 5xx and 429 are worth retrying; other HTTP errors (4xx) are not."""
+    if isinstance(exc, UnexpectedResponse):
+        return exc.status_code is None or exc.status_code == 429 or exc.status_code >= 500
+    return isinstance(
+        exc, ResponseHandlingException | httpx.TransportError | TimeoutError | ConnectionError
+    )
+
+
+async def with_retries[T](operation: Callable[[], Awaitable[T]]) -> T:
+    """Run a Qdrant call, retrying transient failures with exponential backoff. A cloud load
+    balancer can drop an idle pooled connection, so the first call after a quiet period may
+    fail once; every operation retried here is idempotent."""
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            return await operation()
+        except Exception as exc:
+            if attempt == MAX_ATTEMPTS or not is_transient(exc):
+                raise
+            logger.info(
+                "vector_index_retry", extra={"attempt": attempt, "error": type(exc).__name__}
+            )
+            await asyncio.sleep(RETRY_BASE_DELAY_SECONDS * 2 ** (attempt - 1))
+    raise AssertionError("unreachable")
 
 
 async def ensure_collection(client: AsyncQdrantClient, dimensions: int) -> None:
@@ -83,7 +114,9 @@ class VectorIndex:
             )
             for chunk, vector in zip(chunks, vectors, strict=True)
         ]
-        try:
+
+        async def write() -> None:
+            # Point ids are deterministic, so repeating the whole write after a failure is safe.
             await self._client.delete(
                 COLLECTION,
                 points_selector=FilterSelector(filter=document_filter(document_id, workspace_id)),
@@ -93,16 +126,23 @@ class VectorIndex:
                 await self._client.upsert(
                     COLLECTION, points=points[start : start + UPSERT_BATCH_SIZE], wait=True
                 )
+
+        try:
+            await with_retries(write)
         except Exception as exc:
             logger.warning("vector_index_write_failed", extra={"error": type(exc).__name__})
             raise VectorIndexError from exc
 
     async def delete_document(self, document_id: uuid.UUID, workspace_id: uuid.UUID) -> None:
         try:
-            await self._client.delete(
-                COLLECTION,
-                points_selector=FilterSelector(filter=document_filter(document_id, workspace_id)),
-                wait=True,
+            await with_retries(
+                lambda: self._client.delete(
+                    COLLECTION,
+                    points_selector=FilterSelector(
+                        filter=document_filter(document_id, workspace_id)
+                    ),
+                    wait=True,
+                )
             )
         except Exception as exc:
             logger.warning("vector_index_delete_failed", extra={"error": type(exc).__name__})

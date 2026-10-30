@@ -3,8 +3,9 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.services.agent import AgentRunner
 from app.services.document_processing import DocumentProcessor, Outcome
-from app.services.queue import ProcessDocumentJob
+from app.services.queue import AgentRunJob, ProcessDocumentJob
 
 logger = logging.getLogger(__name__)
 
@@ -23,3 +24,17 @@ async def process_document(ctx: dict[str, Any], payload: Any) -> str:
     processor: DocumentProcessor = ctx["processor"]
     outcome: Outcome = await processor.process(job)
     return outcome.value
+
+
+async def run_agent(ctx: dict[str, Any], payload: Any) -> str:
+    """arq task: execute a queued agent run. The runner records COMPLETED or FAILED."""
+    try:
+        job = AgentRunJob.model_validate(payload)
+    except ValidationError as exc:
+        logger.error(
+            "invalid_job_payload",
+            extra={"job_id": ctx.get("job_id"), "errors": [e["type"] for e in exc.errors()]},
+        )
+        return "rejected"
+    runner: AgentRunner = ctx["agent_runner"]
+    return await runner.run(job)

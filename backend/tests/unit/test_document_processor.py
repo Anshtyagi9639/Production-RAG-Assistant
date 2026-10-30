@@ -1,7 +1,7 @@
 """The worker's orchestration: status transitions, failure reasons, and vector cleanup.
 
-The document store is an in-memory double of SqlDocumentStore (whose SQL transitions are
-tested against PostgreSQL in tests/integration). Files, extraction, chunking and the Qdrant
+The document store is an in-memory double of MongoDocumentStore (whose transitions are
+tested against MongoDB Atlas in tests/integration). Files, extraction, chunking and the Qdrant
 index are real; the embedding provider is FakeEmbedder.
 """
 
@@ -190,7 +190,7 @@ async def test_unexpected_errors_fail_the_document_without_leaking_details(
 
 
 class BrokenIndex(VectorIndex):
-    async def replace_document(self, **kwargs: object) -> None:  # type: ignore[override]
+    async def replace_document(self, **kwargs: object) -> None:
         raise VectorIndexError
 
 

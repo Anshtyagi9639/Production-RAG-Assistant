@@ -1,17 +1,12 @@
 import math
 from collections.abc import Mapping, Sequence
-from typing import Any
 
 from pydantic import BaseModel, Field
-from sqlalchemy import ColumnElement, Select, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import InstrumentedAttribute
 
 from app.core.errors import AppError
 
 MAX_PAGE_SIZE = 100
-
-SortColumn = ColumnElement[Any] | InstrumentedAttribute[Any]
+ASCENDING, DESCENDING = 1, -1
 
 
 class PageParams(BaseModel):
@@ -41,40 +36,16 @@ class Page[ItemT](BaseModel):
         )
 
 
-def apply_sort(
-    statement: Select[Any],
-    sort: str,
-    allowed: Mapping[str, SortColumn],
-    tiebreaker: SortColumn,
-) -> Select[Any]:
-    """Order by a whitelisted field. `sort` is a field name, prefixed with `-` for descending.
+def sort_spec(sort: str, allowed: Mapping[str, str]) -> list[tuple[str, int]]:
+    """MongoDB sort for a whitelisted field. `sort` is a field name, `-`-prefixed for descending.
 
-    The tiebreaker (normally the primary key) keeps page boundaries stable when sort values tie.
+    `_id` is added as a tiebreaker so page boundaries stay stable when sort values tie.
     """
-    descending = sort.startswith("-")
-    field = sort.removeprefix("-")
-    column = allowed.get(field)
-    if column is None:
+    direction = DESCENDING if sort.startswith("-") else ASCENDING
+    name = sort.removeprefix("-")
+    field = allowed.get(name)
+    if field is None:
         raise AppError(
-            400,
-            "invalid_sort",
-            f"Cannot sort by '{field}'.",
-            details={"allowed": sorted(allowed)},
+            400, "invalid_sort", f"Cannot sort by '{name}'.", details={"allowed": sorted(allowed)}
         )
-    if descending:
-        return statement.order_by(column.desc(), tiebreaker.desc())
-    return statement.order_by(column.asc(), tiebreaker.asc())
-
-
-def count_statement(statement: Select[Any]) -> Select[tuple[int]]:
-    """COUNT(*) over the same filters, without the ordering (which a count doesn't need)."""
-    return select(func.count()).select_from(statement.order_by(None).subquery())
-
-
-async def paginate(
-    session: AsyncSession, statement: Select[Any], params: PageParams
-) -> tuple[list[Any], int]:
-    """Return one page of scalar results and the total number of matching rows."""
-    total = await session.scalar(count_statement(statement)) or 0
-    result = await session.scalars(statement.limit(params.page_size).offset(params.offset))
-    return list(result.all()), total
+    return [(field, direction), ("_id", direction)]

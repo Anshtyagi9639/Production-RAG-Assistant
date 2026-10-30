@@ -1,17 +1,16 @@
 import uuid
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.pagination import Page, PageParams
+from app.db.mongo import Database
 from app.repositories.activity import ActivityRepository
 from app.repositories.stats import StatsRepository
 from app.schemas.activity import ActivityOut, DocumentStats, StatsOut, TokenStats
 
 
 class ActivityService:
-    def __init__(self, session: AsyncSession) -> None:
-        self._activity = ActivityRepository(session)
-        self._stats = StatsRepository(session)
+    def __init__(self, db: Database) -> None:
+        self._activity = ActivityRepository(db)
+        self._stats = StatsRepository(db)
 
     async def list(self, workspace_id: uuid.UUID, params: PageParams) -> Page[ActivityOut]:
         rows, total = await self._activity.list(workspace_id, params)

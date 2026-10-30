@@ -17,7 +17,14 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     allowed_origins: str = "http://localhost:3000"
 
-    database_url: str
+    # MongoDB Atlas: the application database.
+    mongodb_uri: SecretStr
+    mongodb_database: str = Field(min_length=1)
+    mongodb_server_selection_timeout_ms: int = Field(default=10_000, ge=1_000)
+    # Upper bound for a whole transaction, including the driver's retries of transient errors
+    # (unbounded, those retries last up to 120 s when the database is unreachable).
+    mongodb_transaction_timeout_seconds: float = Field(default=15, gt=0)
+
     redis_url: str
     qdrant_url: str
     qdrant_api_key: SecretStr | None = None
@@ -47,6 +54,26 @@ class Settings(BaseSettings):
     retrieval_top_k: int = Field(default=6, ge=1, le=50)
     retrieval_score_threshold: float = Field(default=0.3, ge=0, le=1)
     query_embedding_cache_ttl_seconds: int = Field(default=600, ge=0)
+
+    # Chat (grounded answers) and agent
+    openai_chat_model: str = "gpt-4o-mini"
+    llm_timeout_seconds: float = Field(default=60, gt=0)
+    llm_max_retries: int = Field(default=2, ge=0)
+    llm_max_output_tokens: int = Field(default=800, ge=64)
+    # Retrieved passages sent to the model are cut off at this many tokens.
+    context_token_budget: int = Field(default=6000, ge=200)
+    # Earlier messages used to rewrite a follow-up into a standalone question.
+    chat_history_messages: int = Field(default=6, ge=0, le=20)
+    agent_max_extra_rounds: int = Field(default=2, ge=0, le=2)
+
+    # Per-user rate limits on /chat, /search and /agent/run (fixed window, in Redis).
+    rate_limit_requests: int = Field(default=20, ge=1)
+    rate_limit_window_seconds: int = Field(default=60, ge=1)
+
+    # LangSmith tracing (optional; the app behaves the same with it off).
+    langsmith_tracing: bool = False
+    langsmith_api_key: SecretStr | None = None
+    langsmith_project: str = "copilot"
 
     # Worker
     worker_job_timeout_seconds: int = Field(default=600, ge=30)
