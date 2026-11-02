@@ -1,4 +1,4 @@
-import { apiRequest } from "@/lib/api/client"
+import { ApiError, apiRequest, uploadToBucket } from "@/lib/api/client"
 import type {
   ActivityEntry,
   AgentRun,
@@ -6,6 +6,7 @@ import type {
   ChatResponse,
   ConversationDetail,
   ConversationSummary,
+  DirectUpload,
   Document,
   DocumentListParams,
   Me,
@@ -45,10 +46,30 @@ export const documentsApi = {
     }),
   get: (workspaceId: string, id: string) =>
     apiRequest<Document>(`/documents/${encodeURIComponent(id)}`, { workspaceId }),
-  upload: (workspaceId: string, file: File) => {
-    const form = new FormData()
-    form.append("file", file)
-    return apiRequest<Document>("/documents/upload", { method: "POST", form, workspaceId })
+  /**
+   * The file goes straight to the storage bucket when the backend offers it (deployments,
+   * where the API can't take large request bodies), otherwise through the API.
+   */
+  upload: async (workspaceId: string, file: File) => {
+    let direct: DirectUpload
+    try {
+      direct = await apiRequest<DirectUpload>("/documents/upload/direct", {
+        method: "POST",
+        json: { filename: file.name, size_bytes: file.size },
+        workspaceId,
+      })
+    } catch (error) {
+      if (!(error instanceof ApiError && error.code === "direct_upload_unavailable")) throw error
+      const form = new FormData()
+      form.append("file", file)
+      return apiRequest<Document>("/documents/upload", { method: "POST", form, workspaceId })
+    }
+    await uploadToBucket(direct.url, direct.fields, file)
+    return apiRequest<Document>("/documents/upload/complete", {
+      method: "POST",
+      json: { upload_token: direct.upload_token },
+      workspaceId,
+    })
   },
   remove: (workspaceId: string, id: string) =>
     apiRequest<void>(`/documents/${encodeURIComponent(id)}`, { method: "DELETE", workspaceId }),

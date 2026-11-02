@@ -1,10 +1,12 @@
 """Upload validation: extension allow-list, size, emptiness, and magic bytes.
 
 Content is checked against the claimed extension so a renamed executable is rejected before it
-is stored. Files that pass but are malformed inside (e.g. a truncated PDF) are accepted here
-and end as FAILED with a readable reason when the worker extracts them.
+is stored (or, for a file uploaded straight to the bucket, deleted before it's recorded). Files
+that pass but are malformed inside (e.g. a truncated PDF) are accepted here and end as FAILED
+with a readable reason when the worker extracts them.
 """
 
+import codecs
 import io
 import re
 import unicodedata
@@ -22,6 +24,16 @@ CONTENT_TYPES = {
 }
 MAX_FILENAME_LENGTH = 255
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+_ZIP_SIGNATURE = b"PK\x03\x04"
+# Bytes of a directly uploaded file read back to check it matches its extension.
+HEAD_SAMPLE_BYTES = 8 * 1024
+
+
+@dataclass(frozen=True)
+class ValidatedName:
+    filename: str
+    extension: str
+    content_type: str
 
 
 @dataclass(frozen=True)
@@ -68,7 +80,26 @@ def _content_matches(extension: str, data: bytes) -> bool:
     return _is_utf8_text(data)
 
 
-def validate_upload(raw_filename: str | None, data: bytes, max_bytes: int) -> ValidatedUpload:
+def _head_matches(extension: str, head: bytes, complete: bool) -> bool:
+    """The same check on only the first bytes of a file uploaded straight to the bucket.
+
+    A DOCX is recognised by its ZIP signature here; its structure is checked when the worker
+    extracts it. Text may end in the middle of a UTF-8 sequence when the sample is cut short.
+    """
+    if extension == ".pdf":
+        return head.startswith(b"%PDF-")
+    if extension == ".docx":
+        return head.startswith(_ZIP_SIGNATURE)
+    if b"\x00" in head:
+        return False
+    try:
+        codecs.getincrementaldecoder("utf-8")().decode(head, final=complete)
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def validate_filename(raw_filename: str | None) -> ValidatedName:
     filename = sanitize_filename(raw_filename)
     extension = PurePosixPath(filename).suffix.lower()
     if extension not in CONTENT_TYPES:
@@ -77,18 +108,37 @@ def validate_upload(raw_filename: str | None, data: bytes, max_bytes: int) -> Va
             "unsupported_file_type",
             "Only PDF, DOCX, TXT and Markdown (.md) files are supported.",
         )
-    if len(data) > max_bytes:
+    return ValidatedName(filename, extension, CONTENT_TYPES[extension])
+
+
+def validate_size(size: int, max_bytes: int) -> None:
+    if size > max_bytes:
         raise AppError(
             413,
             "file_too_large",
             f"The file is larger than the {max_bytes // (1024 * 1024)} MB limit.",
         )
-    if not data:
+    if size <= 0:
         raise AppError(400, "empty_file", "The file is empty.")
-    if not _content_matches(extension, data):
-        raise AppError(
-            415,
-            "content_mismatch",
-            f"The file's content doesn't match its {extension} extension.",
-        )
-    return ValidatedUpload(filename, extension, CONTENT_TYPES[extension], data)
+
+
+def _content_mismatch(extension: str) -> AppError:
+    return AppError(
+        415,
+        "content_mismatch",
+        f"The file's content doesn't match its {extension} extension.",
+    )
+
+
+def validate_upload(raw_filename: str | None, data: bytes, max_bytes: int) -> ValidatedUpload:
+    name = validate_filename(raw_filename)
+    validate_size(len(data), max_bytes)
+    if not _content_matches(name.extension, data):
+        raise _content_mismatch(name.extension)
+    return ValidatedUpload(name.filename, name.extension, name.content_type, data)
+
+
+def validate_head(extension: str, head: bytes, size: int) -> None:
+    """Check a directly uploaded file from its first bytes (`head`) and its stored `size`."""
+    if not _head_matches(extension, head, complete=len(head) >= size):
+        raise _content_mismatch(extension)

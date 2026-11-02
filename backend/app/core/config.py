@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # Upper bound for a whole transaction, including the driver's retries of transient errors
     # (unbounded, those retries last up to 120 s when the database is unreachable).
     mongodb_transaction_timeout_seconds: float = Field(default=15, gt=0)
+    # Connections per process (the driver's default is 100). Serverless deploys run many
+    # small instances, so keep it low there (e.g. 10) to stay under the cluster's limit.
+    mongodb_max_pool_size: int = Field(default=100, ge=1)
 
     redis_url: str
     qdrant_url: str
@@ -44,6 +47,10 @@ class Settings(BaseSettings):
     s3_region: str = "auto"
     s3_access_key_id: SecretStr | None = None
     s3_secret_access_key: SecretStr | None = None
+    # How long a presigned direct-to-bucket upload stays valid (STORAGE_BACKEND=s3 only).
+    direct_upload_expire_seconds: int = Field(default=900, ge=60, le=3600)
+    # Set by Vercel on deployments ("production" or "preview"; "development" in `vercel dev`).
+    vercel_env: str | None = None
 
     # Embeddings and retrieval
     openai_api_key: SecretStr | None = None
@@ -90,6 +97,10 @@ class Settings(BaseSettings):
             missing = [name for name, value in required.items() if not value]
             if missing:
                 raise ValueError(f"STORAGE_BACKEND=s3 requires {', '.join(missing)}")
+        elif self.vercel_env in {"production", "preview"}:
+            # A function's disk is temporary and never shared with the worker: uploads would
+            # be lost or never processed.
+            raise ValueError("Vercel deployments require STORAGE_BACKEND=s3")
         return self
 
     @property

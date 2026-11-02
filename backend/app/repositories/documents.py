@@ -57,7 +57,15 @@ class DocumentRepository:
         ], total
 
     async def get(self, workspace_id: uuid.UUID, document_id: uuid.UUID) -> DocumentRow | None:
-        item = await self._documents.find_one({"_id": document_id, "workspace_id": workspace_id})
+        return await self._find_one({"_id": document_id, "workspace_id": workspace_id})
+
+    async def get_by_storage_key(
+        self, workspace_id: uuid.UUID, storage_key: str
+    ) -> DocumentRow | None:
+        return await self._find_one({"storage_key": storage_key, "workspace_id": workspace_id})
+
+    async def _find_one(self, query: dict[str, Any]) -> DocumentRow | None:
+        item = await self._documents.find_one(query)
         if item is None:
             return None
         document = Document.from_document(item)

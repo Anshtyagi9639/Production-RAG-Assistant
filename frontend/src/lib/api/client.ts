@@ -116,3 +116,38 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   if (response.status === 204) return undefined as T
   return (await response.json()) as T
 }
+
+/**
+ * POST a file to a presigned storage URL. No auth headers: the signed fields are the
+ * permission, and they only allow this one key, type and size until they expire.
+ */
+export async function uploadToBucket(
+  url: string,
+  fields: Record<string, string>,
+  file: File,
+): Promise<void> {
+  const form = new FormData()
+  for (const [name, value] of Object.entries(fields)) form.append(name, value)
+  // The bucket ignores fields after the file, so it goes last.
+  form.append("file", file)
+
+  let response: Response
+  try {
+    response = await fetch(url, { method: "POST", body: form })
+  } catch {
+    // Also how a bucket without a CORS rule for this site shows up in the browser.
+    throw new ApiError(
+      0,
+      "storage_unreachable",
+      "The file couldn't be sent to storage. Check your connection and try again.",
+    )
+  }
+  if (!response.ok) {
+    // S3 answers with XML; its 403 here means the upload expired or the file changed size.
+    throw new ApiError(
+      response.status,
+      "storage_rejected",
+      "Storage refused the file. Upload it again.",
+    )
+  }
+}

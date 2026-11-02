@@ -87,6 +87,7 @@ def create_mongo_client(
         uuidRepresentation="standard",
         tz_aware=True,
         serverSelectionTimeoutMS=settings.mongodb_server_selection_timeout_ms,
+        maxPoolSize=settings.mongodb_max_pool_size,
         appname=appname,
         event_listeners=[ConnectivityLogger()],
     )

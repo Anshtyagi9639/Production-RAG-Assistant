@@ -39,6 +39,25 @@ class DocumentOut(BaseModel):
         )
 
 
+class DirectUploadRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=1024)
+    size_bytes: int = Field(ge=0)
+
+
+class DirectUploadOut(BaseModel):
+    """POST `fields` and then the file (as `file`) to `url`, then send `upload_token` to
+    /documents/upload/complete."""
+
+    url: str
+    fields: dict[str, str]
+    upload_token: str
+    expires_in: int
+
+
+class CompleteUploadRequest(BaseModel):
+    upload_token: str = Field(min_length=1, max_length=4096)
+
+
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=1000)
     top_k: int | None = Field(default=None, ge=1, le=20)

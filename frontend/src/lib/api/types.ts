@@ -55,6 +55,14 @@ export interface RegisterResponse {
   workspace: Workspace
 }
 
+/** A presigned upload: POST `fields`, then the file, straight to the storage bucket. */
+export interface DirectUpload {
+  url: string
+  fields: Record<string, string>
+  upload_token: string
+  expires_in: number
+}
+
 export interface Document {
   id: string
   filename: string

@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 from typing import Protocol
 
 from app.core.errors import UserFacingError
@@ -23,6 +24,14 @@ def validate_key(key: str) -> str:
     return key
 
 
+@dataclass(frozen=True)
+class PresignedUpload:
+    """A browser form POST straight to the bucket: send `fields`, then the file, to `url`."""
+
+    url: str
+    fields: dict[str, str]
+
+
 class Storage(Protocol):
     """Where uploaded files live. Local disk in development, an S3-compatible bucket in deploys."""
 
@@ -31,3 +40,18 @@ class Storage(Protocol):
     async def read(self, key: str) -> bytes: ...
 
     async def delete(self, key: str) -> None: ...
+
+    async def presign_upload(
+        self, key: str, content_type: str, size_bytes: int, expires_seconds: int
+    ) -> PresignedUpload | None:
+        """A short-lived upload that only accepts exactly `size_bytes` bytes at `key`, or None
+        when this storage can't take uploads directly (the file then goes through the API)."""
+        ...
+
+    async def size(self, key: str) -> int | None:
+        """The stored file's size in bytes, or None if nothing is stored at `key`."""
+        ...
+
+    async def read_head(self, key: str, length: int) -> bytes:
+        """The first `length` bytes (fewer for a smaller file)."""
+        ...

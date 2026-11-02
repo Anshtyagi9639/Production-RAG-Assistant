@@ -14,7 +14,12 @@ from app.api.dependencies import (
 from app.core.errors import AppError
 from app.core.pagination import Page
 from app.models.enums import DocumentStatus
-from app.schemas.documents import DocumentOut
+from app.schemas.documents import (
+    CompleteUploadRequest,
+    DirectUploadOut,
+    DirectUploadRequest,
+    DocumentOut,
+)
 from app.services.documents import DocumentService
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -49,6 +54,32 @@ async def upload_document(
     """Owner only. Stores the file and queues processing; the response is the UPLOADED document."""
     data = await file.read(settings.max_upload_bytes + 1)
     return await service.upload(user, membership.workspace.id, file.filename, data)
+
+
+@router.post("/upload/direct")
+async def create_direct_upload(
+    request: DirectUploadRequest,
+    user: CurrentUser,
+    membership: OwnerMembership,
+    service: DocumentServiceDep,
+) -> DirectUploadOut:
+    """Owner only. A short-lived URL to upload the file straight to the bucket, so large files
+    never pass through the API. 409 `direct_upload_unavailable` when storage is a local
+    directory: use /documents/upload instead."""
+    return await service.create_direct_upload(
+        user, membership.workspace.id, request.filename, request.size_bytes
+    )
+
+
+@router.post("/upload/complete", status_code=status.HTTP_202_ACCEPTED)
+async def complete_direct_upload(
+    request: CompleteUploadRequest,
+    user: CurrentUser,
+    membership: OwnerMembership,
+    service: DocumentServiceDep,
+) -> DocumentOut:
+    """Owner only. Checks the uploaded file, records it as UPLOADED and queues processing."""
+    return await service.complete_direct_upload(user, membership.workspace.id, request.upload_token)
 
 
 @router.get("")

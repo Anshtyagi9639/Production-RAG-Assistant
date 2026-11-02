@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 
-from app.storage.base import StoredFileMissingError, validate_key
+from app.storage.base import PresignedUpload, StoredFileMissingError, validate_key
 
 
 class LocalStorage:
@@ -34,3 +34,28 @@ class LocalStorage:
 
     async def delete(self, key: str) -> None:
         await asyncio.to_thread(self._path(key).unlink, missing_ok=True)
+
+    async def presign_upload(
+        self, key: str, content_type: str, size_bytes: int, expires_seconds: int
+    ) -> PresignedUpload | None:
+        # A directory has no upload URL: files reach it through the API.
+        return None
+
+    async def size(self, key: str) -> int | None:
+        path = self._path(key)
+        try:
+            return (await asyncio.to_thread(path.stat)).st_size
+        except FileNotFoundError:
+            return None
+
+    async def read_head(self, key: str, length: int) -> bytes:
+        path = self._path(key)
+
+        def read() -> bytes:
+            with path.open("rb") as file:
+                return file.read(length)
+
+        try:
+            return await asyncio.to_thread(read)
+        except FileNotFoundError as exc:
+            raise StoredFileMissingError from exc
