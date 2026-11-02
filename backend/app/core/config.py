@@ -97,11 +97,14 @@ class Settings(BaseSettings):
             missing = [name for name, value in required.items() if not value]
             if missing:
                 raise ValueError(f"STORAGE_BACKEND=s3 requires {', '.join(missing)}")
-        elif self.vercel_env in {"production", "preview"}:
-            # A function's disk is temporary and never shared with the worker: uploads would
-            # be lost or never processed.
-            raise ValueError("Vercel deployments require STORAGE_BACKEND=s3")
         return self
+
+    @property
+    def local_storage_unusable(self) -> bool:
+        """On a Vercel deployment a function's disk is temporary and never shared with the
+        worker, so local storage would lose uploads. File operations are refused instead
+        (sign-in and everything else keep working until STORAGE_BACKEND=s3 is set)."""
+        return self.storage_backend == "local" and self.vercel_env in {"production", "preview"}
 
     @property
     def cors_origins(self) -> list[str]:

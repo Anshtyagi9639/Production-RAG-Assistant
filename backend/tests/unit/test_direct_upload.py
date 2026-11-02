@@ -21,9 +21,11 @@ from app.core.security import (
     decode_upload_token,
 )
 from app.services.uploads import validate_head
+from app.storage import create_storage
 from app.storage.base import InvalidStorageKeyError, StoredFileMissingError
 from app.storage.local import LocalStorage
 from app.storage.s3 import S3Storage
+from app.storage.unconfigured import UnconfiguredStorage
 from tests.conftest import fixture_bytes
 
 
@@ -188,12 +190,25 @@ class _Body:
         return self._data
 
 
-def test_vercel_deployments_refuse_local_storage(settings: Settings) -> None:
-    values = settings.model_dump()
-    values["vercel_env"] = "production"
+async def test_vercel_deployments_without_s3_refuse_file_operations_only(
+    settings: Settings,
+) -> None:
+    deployed = settings.model_copy(update={"vercel_env": "production"})
 
-    with pytest.raises(ValueError, match="STORAGE_BACKEND=s3"):
-        Settings(_env_file=None, **values)
+    storage = create_storage(deployed)
 
-    values["vercel_env"] = "development"  # `vercel dev` on a laptop may use local storage
-    assert Settings(_env_file=None, **values).storage_backend == "local"
+    assert isinstance(storage, UnconfiguredStorage)
+    for operation in (
+        storage.save(f"{uuid.uuid4().hex}.txt", b"x"),
+        storage.presign_upload(f"{uuid.uuid4().hex}.txt", "text/plain", 1, 900),
+    ):
+        with pytest.raises(AppError) as exc_info:
+            await operation
+        assert (exc_info.value.status_code, exc_info.value.code) == (503, "storage_not_configured")
+
+
+def test_local_storage_is_kept_outside_vercel_deployments(settings: Settings) -> None:
+    # `vercel dev` on a laptop reports "development" and may use a local directory.
+    for vercel_env in (None, "development"):
+        local = settings.model_copy(update={"vercel_env": vercel_env})
+        assert isinstance(create_storage(local), LocalStorage)

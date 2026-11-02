@@ -77,7 +77,7 @@ Sources were read on 2026-11-02:
 | # | Blocker | Type | Fixed in repo? |
 |---|---|---|---|
 | B1 | Uploads above 4.5 MB failed through the function, and the required maximum is 50 MB. | Code | **Yes.** See [§9](#9-s3-upload-architecture-for-50-mb-files). |
-| B2 | `STORAGE_BACKEND=local` on Vercel would lose files: function disks are temporary and not shared with the worker. | Code and config | **Yes, guarded.** The backend now refuses to start on a Vercel production or preview deployment unless `STORAGE_BACKEND=s3`. |
+| B2 | `STORAGE_BACKEND=local` on Vercel would lose files: function disks are temporary and not shared with the worker. | Code and config | **Yes, guarded.** On a Vercel production or preview deployment without `STORAGE_BACKEND=s3`, file operations answer 503 `storage_not_configured`. Sign-in and everything else keep working. |
 | B3 | No S3 bucket exists. `S3_BUCKET` and the S3 keys are empty in `.env`. | Infrastructure | No. Your action. |
 | B4 | Atlas cannot allow-list Vercel's outbound IPs on Hobby. | Infrastructure or plan | No. A decision for you. See [§8](#8-mongodb-atlas-networking-requirements). |
 | B5 | No host for the ARQ worker. | Infrastructure | No. A decision for you. See [§10](#10-external-worker-deployment-instructions). |
@@ -94,7 +94,8 @@ Sources were read on 2026-11-02:
 |---|---|---|
 | P0 | Direct-to-S3 uploads with a presigned POST that pins the key, Content-Type and exact byte size. A signed upload ticket and a server-side completion step verify the object. | `backend/app/storage/*.py`, `backend/app/services/documents.py`, `backend/app/services/uploads.py`, `backend/app/api/routes/documents.py`, `backend/app/schemas/documents.py`, `backend/app/core/security.py`, `backend/app/repositories/documents.py`, `frontend/src/lib/api/{client,endpoints,types}.ts` |
 | P0 | S3 client forced to SigV4, with regional virtual-hosted URLs on AWS. Before this, boto3 signed `us-east-1` forms with SigV2 and gave other regions the global endpoint, which can redirect a browser POST. | `backend/app/storage/s3.py` |
-| P0 | Startup guard: Vercel production and preview deployments require `STORAGE_BACKEND=s3`. | `backend/app/core/config.py` |
+| P0 | Storage guard: on Vercel production and preview deployments, local storage is replaced by a stand-in that answers 503 until `STORAGE_BACKEND=s3` is set. | `backend/app/core/config.py`, `backend/app/storage/__init__.py`, `backend/app/storage/unconfigured.py` |
+| P0 | A loopback `NEXT_PUBLIC_API_URL` (for example `http://localhost:8000`) is ignored on any page not served from localhost, and a trailing `/api` is dropped. This fixes the production login error "Can't reach the server at http://localhost:8000". | `frontend/src/lib/api/url.ts`, `frontend/src/lib/api/client.ts` |
 | P1 | `MONGODB_MAX_POOL_SIZE` setting. The default stays at the driver's 100; use 10 on Vercel. | `backend/app/core/config.py`, `backend/app/db/mongo.py` |
 | P1 | `.env.example` documents the new settings and the S3 and Vercel requirements. | `.env.example` |
 | P2 | `/favicon.ico` served (it was a 404). | `frontend/next.config.ts` |

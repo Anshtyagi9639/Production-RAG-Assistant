@@ -1,10 +1,11 @@
 import { accessToken } from "@/lib/session"
 import type { ErrorBody } from "@/lib/api/types"
+import { buildApiUrl, type QueryValue, resolveApiBase } from "@/lib/api/url"
 
 // Read as a literal so Next.js inlines it at build time. The only env var the frontend uses.
 // Empty means the API is served from this site's own origin under /api (one Vercel project
 // routes /api/* to the backend service); local development sets it to the backend's URL.
-const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/+$/, "")
+const API_URL = process.env.NEXT_PUBLIC_API_URL
 
 export class ApiError extends Error {
   constructor(
@@ -20,8 +21,6 @@ export class ApiError extends Error {
     this.name = "ApiError"
   }
 }
-
-type QueryValue = string | number | undefined
 
 interface RequestOptions {
   method?: "GET" | "POST" | "DELETE"
@@ -70,11 +69,8 @@ async function toApiError(response: Response): Promise<ApiError> {
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  // With no API_URL the path is relative and resolves against the page's own origin.
-  const url = new URL(`${API_URL}/api${path}`, window.location.origin)
-  for (const [key, value] of Object.entries(options.query ?? {})) {
-    if (value !== undefined && value !== "") url.searchParams.set(key, String(value))
-  }
+  const base = resolveApiBase(API_URL, window.location.origin)
+  const url = buildApiUrl(base, path, options.query)
 
   const headers = new Headers({ Accept: "application/json" })
   const token = accessToken.get()
@@ -104,7 +100,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     throw new ApiError(
       0,
       "network_error",
-      `Can't reach the server at ${API_URL || window.location.origin}. Make sure the backend is running, then try again.`,
+      `Can't reach the server at ${base}. Make sure the backend is running, then try again.`,
     )
   }
 
