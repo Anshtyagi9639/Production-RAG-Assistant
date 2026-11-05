@@ -1,5 +1,6 @@
 import pytest
 
+from app.core.config import Settings
 from app.services.health import WORKER_HEARTBEAT_KEY, HealthService, worker_check
 from app.workers import settings as worker_settings
 
@@ -95,3 +96,32 @@ async def test_worker_startup_gives_up_after_the_last_attempt(
 
     with pytest.raises(ConnectionError):
         await worker_settings._with_retries("mongodb", down)
+
+
+@pytest.mark.parametrize(
+    ("environment", "vercel_env", "explicit", "expected"),
+    [
+        ("development", None, None, True),
+        ("development", "preview", None, False),
+        ("production", None, None, False),
+        ("test", None, None, False),
+        ("production", None, True, True),
+        ("development", None, False, False),
+    ],
+)
+def test_the_embedded_worker_runs_only_in_local_development_unless_set(
+    environment: str, vercel_env: str | None, explicit: bool | None, expected: bool
+) -> None:
+    settings = Settings(
+        mongodb_uri="mongodb://localhost",
+        mongodb_database="copilot",
+        redis_url="redis://localhost",
+        qdrant_url="http://localhost:6333",
+        jwt_secret_key="x" * 32,
+        environment=environment,  # type: ignore[arg-type]
+        vercel_env=vercel_env,
+        embedded_worker=explicit,
+        _env_file=None,  # type: ignore[call-arg]
+    )
+
+    assert settings.run_embedded_worker is expected

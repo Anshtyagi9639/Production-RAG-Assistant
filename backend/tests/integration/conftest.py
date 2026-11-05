@@ -26,8 +26,9 @@ from tests.fakes import FakeEmbedder, FakeLLM, RecordingJobQueue
 
 
 def live_settings() -> Settings:
-    """Connection settings from the environment (.env); a fixed JWT secret for tests."""
-    return Settings(jwt_secret_key=TEST_JWT_SECRET)
+    """Connection settings from the environment (.env); a fixed JWT secret for tests. No
+    embedded worker: it would consume jobs from the real queue."""
+    return Settings(jwt_secret_key=TEST_JWT_SECRET, embedded_worker=False)
 
 
 async def _prepare(settings: Settings, database: str) -> None:

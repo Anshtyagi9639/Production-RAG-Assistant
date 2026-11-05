@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -19,6 +21,7 @@ from app.db.redis import create_redis
 from app.rag.indexing import ensure_collection
 from app.services.queue import create_arq_job_queue
 from app.storage import create_storage
+from app.workers.embedded import supervise_worker
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +55,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         # The worker also bootstraps the collection; /api/health reports Qdrant separately.
         logger.warning("qdrant_collection_bootstrap_failed", extra={"error": type(exc).__name__})
+    worker_task: asyncio.Task[None] | None = None
+    if settings.run_embedded_worker and job_queue is not None:
+        worker_task = asyncio.create_task(supervise_worker(), name="embedded-worker")
     try:
         yield
     finally:
+        if worker_task is not None:
+            worker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await worker_task
         if job_queue is not None:
             await job_queue.close()
         await app.state.qdrant.close()

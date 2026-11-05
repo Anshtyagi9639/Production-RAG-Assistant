@@ -84,6 +84,9 @@ class Settings(BaseSettings):
 
     # Worker
     worker_job_timeout_seconds: int = Field(default=600, ge=30)
+    # Run the arq worker inside the API process. Unset: on in development (not on Vercel),
+    # so uploads are processed without a second terminal; production runs it separately.
+    embedded_worker: bool | None = None
     worker_max_tries: int = Field(default=3, ge=1)
 
     @model_validator(mode="after")
@@ -105,6 +108,12 @@ class Settings(BaseSettings):
         worker, so local storage would lose uploads. File operations are refused instead
         (sign-in and everything else keep working until STORAGE_BACKEND=s3 is set)."""
         return self.storage_backend == "local" and self.vercel_env in {"production", "preview"}
+
+    @property
+    def run_embedded_worker(self) -> bool:
+        if self.embedded_worker is not None:
+            return self.embedded_worker
+        return self.environment == "development" and self.vercel_env is None
 
     @property
     def cors_origins(self) -> list[str]:

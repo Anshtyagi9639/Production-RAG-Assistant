@@ -19,6 +19,7 @@ from app.db.mongo import create_mongo
 from app.db.mongo_schema import ensure_schema
 from app.db.qdrant import create_qdrant
 from app.db.redis import REDIS_RETRY_ON, redis_retry
+from app.rag.chunking import token_encoding
 from app.rag.indexing import VectorIndex, ensure_collection
 from app.repositories.document_store import MongoDocumentStore
 from app.services.agent import AgentRunner
@@ -65,6 +66,9 @@ async def startup(ctx: dict[str, Any]) -> None:
     await _with_retries("mongodb", lambda: ensure_schema(mongo.db))
     qdrant = create_qdrant(_settings)
     await _with_retries("qdrant", lambda: ensure_collection(qdrant, _settings.embedding_dimensions))
+    # Load the tokenizer now (about a second, once per process) instead of during the first
+    # upload; the MongoDB and Qdrant connections above are already warm.
+    await asyncio.to_thread(token_encoding)
     ctx["mongo"] = mongo
     ctx["qdrant"] = qdrant
     embedder = OpenAIEmbedder(_settings)

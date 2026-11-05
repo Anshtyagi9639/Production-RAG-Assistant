@@ -7,6 +7,7 @@ import { useImperativeHandle, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { FileTypeIcon } from "@/components/documents/file-type-icon"
+import { ProcessingStatus } from "@/components/documents/processing-status"
 import { errorMessage } from "@/components/states"
 import { Button } from "@/components/ui/button"
 import { documentsApi } from "@/lib/api/endpoints"
@@ -215,6 +216,8 @@ export function UploadDropzone({
                   </div>
                   {upload.status === "uploading" ? (
                     <UploadProgressBar name={upload.name} progress={upload.progress} />
+                  ) : upload.documentId ? (
+                    <ProcessingStatus workspaceId={workspaceId} documentId={upload.documentId} />
                   ) : (
                     <p
                       className={cn(

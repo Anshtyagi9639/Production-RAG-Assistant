@@ -1,5 +1,5 @@
-# Starts the API, the worker and the frontend, each in its own PowerShell window, then checks
-# that the API can reach MongoDB Atlas, Redis and Qdrant.
+# Starts the API (which runs the document worker in development) and the frontend, each in its
+# own PowerShell window, then checks that the API can reach MongoDB Atlas, Redis and Qdrant.
 #
 # Run from the repository root:
 #   powershell -ExecutionPolicy Bypass -File .\start-dev.ps1
@@ -34,12 +34,8 @@ function Start-Window([string]$title, [string]$directory, [string]$command) {
 }
 
 Start-Window "Copilot API" $backend "& '$python' -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
-# The worker exits when it loses Redis or can't reach MongoDB/Qdrant at startup (e.g. a network
-# drop, or Atlas blocking a new IP), so it is restarted in a loop. Close the window to stop it.
-$workerLoop = "while (`$true) { & '$python' -m arq app.workers.settings.WorkerSettings; " +
-    "Write-Host ('Worker stopped (exit ' + `$LASTEXITCODE + '). Restarting in 15 s; close this window to stop.') -ForegroundColor Yellow; " +
-    "Start-Sleep -Seconds 15 }"
-Start-Window "Copilot worker" $backend $workerLoop
+# No separate worker window: with ENVIRONMENT=development the API runs the document worker
+# itself (app/workers/embedded.py) and restarts it if it stops.
 if (-not (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue)) {
     Start-Window "Copilot frontend" $frontend "npm run dev"
 }
