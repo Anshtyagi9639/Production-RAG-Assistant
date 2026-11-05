@@ -1,0 +1,18 @@
+{
+  "description": "Retrieval checks against the seeded demo workspace (seed_data/). Questions are paraphrased so they don't share exact wording with the passages. 'expected' names the passage that answers it; null means nothing in the workspace answers it, so every result should score below the threshold.",
+  "workspace_id": "879886d8-6441-5a65-9d44-40268f6de906",
+  "cases": [
+    {"question": "Why do shipments get held up at the border?", "expected": {"filename": "customs-wise-demo.txt", "chunk_index": 0}},
+    {"question": "Who is legally on the hook for a wrong declaration if a broker filed it?", "expected": {"filename": "customs-wise-demo.txt", "chunk_index": 0}},
+    {"question": "How long does it take for goods to be released?", "expected": {"filename": "customs-wise-demo.txt", "chunk_index": 0}},
+    {"question": "What should the price used for duty include besides the invoice amount?", "expected": {"filename": "customs-wise-demo.txt", "chunk_index": 1}},
+    {"question": "How are mistakes in past declarations fixed?", "expected": {"filename": "customs-wise-demo.txt", "chunk_index": 1}},
+    {"question": "What paperwork do imported groceries need?", "expected": {"filename": "customs-wise-demo.txt", "chunk_index": 1}},
+    {"question": "What happens after an audit is finished?", "expected": {"filename": "customs-wise-demo.txt", "chunk_index": 2}},
+    {"question": "Which documents must be kept for inspections, and for how long?", "expected": {"filename": "customs-wise-demo.txt", "chunk_index": 2}},
+    {"question": "What is the parental leave policy?", "expected": null},
+    {"question": "How do I reset my laptop password?", "expected": null},
+    {"question": "What were last quarter's sales figures?", "expected": null},
+    {"question": "Recommend a good pasta recipe.", "expected": null}
+  ]
+}

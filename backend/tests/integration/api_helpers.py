@@ -67,6 +67,7 @@ async def run_queued_jobs(api: Api) -> list[Outcome]:
     )
     outcomes = [await processor.process(job) for job in api.queue.jobs]
     api.queue.jobs.clear()
+    api.queue.attempts.clear()
     return outcomes
 
 

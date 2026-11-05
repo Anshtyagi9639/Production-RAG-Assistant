@@ -34,7 +34,12 @@ function Start-Window([string]$title, [string]$directory, [string]$command) {
 }
 
 Start-Window "Copilot API" $backend "& '$python' -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
-Start-Window "Copilot worker" $backend "& '$python' -m arq app.workers.settings.WorkerSettings"
+# The worker exits when it loses Redis or can't reach MongoDB/Qdrant at startup (e.g. a network
+# drop, or Atlas blocking a new IP), so it is restarted in a loop. Close the window to stop it.
+$workerLoop = "while (`$true) { & '$python' -m arq app.workers.settings.WorkerSettings; " +
+    "Write-Host ('Worker stopped (exit ' + `$LASTEXITCODE + '). Restarting in 15 s; close this window to stop.') -ForegroundColor Yellow; " +
+    "Start-Sleep -Seconds 15 }"
+Start-Window "Copilot worker" $backend $workerLoop
 if (-not (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue)) {
     Start-Window "Copilot frontend" $frontend "npm run dev"
 }

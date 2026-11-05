@@ -192,6 +192,30 @@ class ChatService:
             [ConversationSummary.build(row) for row in rows], total, params
         )
 
+    async def rename_conversation(
+        self, user: User, workspace_id: uuid.UUID, conversation_id: uuid.UUID, title: str
+    ) -> ConversationSummary:
+        conversation = await self._conversations.rename(
+            workspace_id, user.id, conversation_id, conversation_title(title)
+        )
+        if conversation is None:
+            raise CONVERSATION_NOT_FOUND
+        return ConversationSummary.build(conversation)
+
+    async def delete_conversation(
+        self, user: User, workspace_id: uuid.UUID, conversation_id: uuid.UUID
+    ) -> None:
+        """Removes the conversation and its messages. Their token usage leaves the workspace
+        totals too, since those are summed from the stored messages."""
+        conversation = await self._conversations.get(workspace_id, user.id, conversation_id)
+        if conversation is None:
+            raise CONVERSATION_NOT_FOUND
+
+        async def work(session: Session) -> None:
+            await self._conversations.delete(conversation, session)
+
+        await self._mongo.transaction(work)
+
     async def get_conversation(
         self, user: User, workspace_id: uuid.UUID, conversation_id: uuid.UUID
     ) -> ConversationDetail:

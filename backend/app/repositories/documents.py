@@ -1,5 +1,8 @@
+import builtins
 import uuid
 from typing import Any
+
+from pymongo import ReturnDocument
 
 from app.core.pagination import PageParams, sort_spec
 from app.db.mongo import Database, Session
@@ -37,6 +40,29 @@ class DocumentRepository:
             },
         )
 
+    async def requeue_failed(
+        self, workspace_id: uuid.UUID, document_id: uuid.UUID, session: Session | None = None
+    ) -> Document | None:
+        """FAILED → UPLOADED in one atomic update, so two retries can't both queue a job.
+        None when the document doesn't exist in this workspace or hasn't failed."""
+        item = await self._documents.find_one_and_update(
+            {
+                "_id": document_id,
+                "workspace_id": workspace_id,
+                "status": DocumentStatus.FAILED.value,
+            },
+            {
+                "$set": {
+                    "status": DocumentStatus.UPLOADED.value,
+                    "error_message": None,
+                    "updated_at": utcnow(),
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+            session=session,
+        )
+        return None if item is None else Document.from_document(item)
+
     async def list(
         self,
         workspace_id: uuid.UUID,
@@ -55,6 +81,21 @@ class DocumentRepository:
         return [
             (d, names.get(d.uploaded_by_id) if d.uploaded_by_id else None) for d in documents
         ], total
+
+    async def passages(
+        self, workspace_id: uuid.UUID, document_id: uuid.UUID, params: PageParams
+    ) -> tuple[builtins.list[dict[str, Any]], int]:
+        """A page of the document's chunks in reading order (uses the unique
+        (document_id, chunk_index) index)."""
+        query = {"document_id": document_id, "workspace_id": workspace_id}
+        total = await self._chunks.count_documents(query)
+        cursor = (
+            self._chunks.find(query, {"chunk_index": 1, "page": 1, "text": 1, "token_count": 1})
+            .sort("chunk_index", 1)
+            .skip(params.offset)
+            .limit(params.page_size)
+        )
+        return [item async for item in cursor], total
 
     async def get(self, workspace_id: uuid.UUID, document_id: uuid.UUID) -> DocumentRow | None:
         return await self._find_one({"_id": document_id, "workspace_id": workspace_id})

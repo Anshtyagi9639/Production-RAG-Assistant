@@ -112,7 +112,7 @@ export function SearchPanel({ workspaceId }: { workspaceId: string }) {
                     <FileTypeIcon filename={result.filename} className="size-7" />
                     <div className="min-w-0 flex-1">
                       <Link
-                        href={`/knowledge/${result.document_id}`}
+                        href={`/knowledge/${result.document_id}?passage=${result.chunk_index}`}
                         className="block truncate text-sm font-medium hover:underline"
                       >
                         {result.filename}

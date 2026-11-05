@@ -19,6 +19,17 @@ export function formatDuration(ms: number): string {
   return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`
 }
 
+/** Time between two timestamps, rounded for reading: "4 s", "2 min 5 s", "1 h 3 min". */
+export function formatElapsed(fromIso: string, toIso: string): string {
+  const seconds = Math.max(0, Math.round((Date.parse(toIso) - Date.parse(fromIso)) / 1000))
+  if (seconds < 60) return `${seconds} s`
+  const [major, minor, units] =
+    seconds < 3600
+      ? [Math.floor(seconds / 60), seconds % 60, ["min", "s"]]
+      : [Math.floor(seconds / 3600), Math.floor((seconds % 3600) / 60), ["h", "min"]]
+  return minor === 0 ? `${major} ${units[0]}` : `${major} ${units[0]} ${minor} ${units[1]}`
+}
+
 /** Cosine similarity, shown with two decimals. */
 export function formatScore(score: number): string {
   return score.toFixed(2)

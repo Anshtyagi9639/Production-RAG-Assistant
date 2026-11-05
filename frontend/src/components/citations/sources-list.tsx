@@ -45,7 +45,7 @@ export function SourcesList({
               </span>
               <div className="min-w-0 flex-1">
                 <Link
-                  href={`/knowledge/${source.document_id}`}
+                  href={`/knowledge/${source.document_id}?passage=${source.chunk_index}`}
                   className="flex items-center gap-1.5 text-sm font-medium hover:underline"
                 >
                   <FileTypeIcon

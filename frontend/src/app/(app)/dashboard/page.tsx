@@ -21,6 +21,7 @@ import { useWorkspace } from "@/components/app/workspace-context"
 import { ActivityChart } from "@/components/dashboard/activity-chart"
 import { GettingStarted, useOnboardingHidden } from "@/components/dashboard/getting-started"
 import { StatCards } from "@/components/dashboard/stat-cards"
+import { SystemStatus } from "@/components/dashboard/system-status"
 import {
   MAX_RANGE_DAYS,
   rangeStart,
@@ -554,6 +555,7 @@ export default function DashboardPage() {
             <RecentActivity workspaceId={workspace.id} className="lg:col-span-3" />
             <div className="space-y-6 lg:col-span-2">
               <QuickActions isOwner={isOwner} />
+              <SystemStatus />
               <RecentConversations workspaceId={workspace.id} />
             </div>
           </div>

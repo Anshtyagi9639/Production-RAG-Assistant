@@ -216,6 +216,49 @@ async def test_conversations_are_private_to_their_owner_and_workspace(api: Api) 
     )
 
 
+async def test_owner_can_rename_and_delete_a_conversation_but_others_cannot(
+    api: Api, mongo: Mongo
+) -> None:
+    alice = await with_refunds_doc(api, "edit-chat@example.com", "Alice")
+    bob = await register(api.client, "edit-other@example.com", "Bob")
+    await api.client.post(
+        f"/api/workspaces/{alice.workspace_id}/members",
+        json={"email": "edit-other@example.com"},
+        headers={"Authorization": f"Bearer {alice.token}"},
+    )
+    conversation_id = str((await ask(api, alice, "How long do refunds take?"))["conversation_id"])
+    url = f"/api/conversations/{conversation_id}"
+
+    # A member of the same workspace can neither rename nor delete it.
+    bob_rename = await api.client.patch(
+        url, json={"title": "Mine now"}, headers=bob.headers(alice.workspace_id)
+    )
+    bob_delete = await api.client.delete(url, headers=bob.headers(alice.workspace_id))
+    blank = await api.client.patch(url, json={"title": "   "}, headers=alice.headers())
+    renamed = await api.client.patch(
+        url, json={"title": "  Refund   timelines "}, headers=alice.headers()
+    )
+
+    assert (bob_rename.status_code, bob_rename.json()["error"]["code"]) == (
+        404,
+        "conversation_not_found",
+    )
+    assert bob_delete.status_code == 404
+    assert blank.status_code == 422
+    assert renamed.status_code == 200
+    assert renamed.json()["title"] == "Refund timelines"
+    listed = await api.client.get("/api/conversations", headers=alice.headers())
+    assert [item["title"] for item in listed.json()["items"]] == ["Refund timelines"]
+
+    deleted = await api.client.delete(url, headers=alice.headers())
+
+    assert deleted.status_code == 204
+    assert (await api.client.get(url, headers=alice.headers())).status_code == 404
+    cid = uuid.UUID(conversation_id)
+    assert await mongo.db["conversations"].count_documents({"_id": cid}) == 0
+    assert await mongo.db["messages"].count_documents({"conversation_id": cid}) == 0
+
+
 async def test_llm_failure_is_503_and_nothing_is_saved(api: Api, mongo: Mongo) -> None:
     account = await with_refunds_doc(api, "fail-chat@example.com")
     api.llm.reply = LLMError()

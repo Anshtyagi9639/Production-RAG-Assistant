@@ -95,7 +95,7 @@ function StepMarker({ index, state }: { index: number; state: "done" | "current"
     <span
       className={cn(
         "relative z-10 flex size-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold tabular-nums",
-        state === "done" && "border-success/30 bg-success text-white",
+        state === "done" && "border-success/30 bg-success text-background",
         state === "current" &&
           "border-primary bg-primary text-primary-foreground ring-4 ring-primary/15",
         state === "upcoming" && "bg-card text-muted-foreground",

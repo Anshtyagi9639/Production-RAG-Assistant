@@ -3,11 +3,14 @@ import type { DocumentListParams } from "@/lib/api/types"
 /** Everything tenant-scoped starts with ["workspace", id] so it can be invalidated together. */
 export const queryKeys = {
   me: ["me"] as const,
+  health: ["health"] as const,
   workspace: (workspaceId: string) => ["workspace", workspaceId] as const,
   documents: (workspaceId: string, params: DocumentListParams) =>
     ["workspace", workspaceId, "documents", params] as const,
   document: (workspaceId: string, id: string) =>
     ["workspace", workspaceId, "document", id] as const,
+  passages: (workspaceId: string, id: string, page: number) =>
+    ["workspace", workspaceId, "document", id, "passages", page] as const,
   conversations: (workspaceId: string, page: number) =>
     ["workspace", workspaceId, "conversations", page] as const,
   conversation: (workspaceId: string, id: string) =>

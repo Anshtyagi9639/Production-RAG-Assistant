@@ -2,6 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query"
 import { CheckCircle2, CircleAlert, CloudUpload, X } from "lucide-react"
+import Link from "next/link"
 import { useImperativeHandle, useRef, useState } from "react"
 import { toast } from "sonner"
 
@@ -21,12 +22,46 @@ interface Upload {
   name: string
   size: number
   status: "uploading" | "done" | "error"
+  /** Fraction of the file sent (0-1); undefined until the browser reports any. */
+  progress?: number
   message?: string
+  documentId?: string
 }
 
 export interface UploadDropzoneHandle {
   /** Open the file picker (used by the page's Upload button). */
   openPicker: () => void
+}
+
+/** Byte progress while the file is sent; indeterminate before the first report and while the
+ * server finishes (stores the file and queues it) after the last byte. */
+function UploadProgressBar({ name, progress }: { name: string; progress?: number }) {
+  const sending = progress !== undefined && progress < 1
+  const percent = Math.round((progress ?? 0) * 100)
+  return (
+    <div className="flex items-center gap-2">
+      <div
+        className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"
+        role="progressbar"
+        aria-label={`Uploading ${name}`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={sending ? percent : undefined}
+      >
+        {sending ? (
+          <div
+            className="h-full rounded-full bg-primary transition-[width] duration-200 ease-out"
+            style={{ width: `${percent}%` }}
+          />
+        ) : (
+          <div className="h-full w-1/3 animate-[upload_1.2s_ease-in-out_infinite] rounded-full bg-primary" />
+        )}
+      </div>
+      <span className="w-16 shrink-0 text-right text-xs text-muted-foreground tabular-nums">
+        {sending ? `${percent}%` : progress === undefined ? "Starting…" : "Finishing…"}
+      </span>
+    </div>
+  )
 }
 
 function extension(name: string): string {
@@ -75,9 +110,15 @@ export function UploadDropzone({
     for (const { file, key } of started) {
       if (!ACCEPTED_EXTENSIONS.includes(extension(file.name))) continue
       try {
-        await documentsApi.upload(workspaceId, file)
+        const created = await documentsApi.upload(workspaceId, file, (progress) =>
+          update(key, { progress }),
+        )
         uploaded += 1
-        update(key, { status: "done", message: "Uploaded. Processing has started." })
+        update(key, {
+          status: "done",
+          message: "Uploaded. Processing has started.",
+          documentId: created.id,
+        })
       } catch (error) {
         update(key, { status: "error", message: errorMessage(error) })
       }
@@ -173,13 +214,7 @@ export function UploadDropzone({
                     </span>
                   </div>
                   {upload.status === "uploading" ? (
-                    <div
-                      className="h-1 overflow-hidden rounded-full bg-muted"
-                      role="progressbar"
-                      aria-label={`Uploading ${upload.name}`}
-                    >
-                      <div className="h-full w-1/3 animate-[upload_1.2s_ease-in-out_infinite] rounded-full bg-primary" />
-                    </div>
+                    <UploadProgressBar name={upload.name} progress={upload.progress} />
                   ) : (
                     <p
                       className={cn(
@@ -193,6 +228,14 @@ export function UploadDropzone({
                         <CheckCircle2 className="size-3.5 shrink-0" aria-hidden />
                       )}
                       {upload.message}
+                      {upload.documentId && (
+                        <Link
+                          href={`/knowledge/${upload.documentId}`}
+                          className="ml-1 font-medium text-primary underline-offset-2 hover:underline"
+                        >
+                          View
+                        </Link>
+                      )}
                     </p>
                   )}
                 </div>

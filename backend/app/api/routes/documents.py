@@ -19,6 +19,7 @@ from app.schemas.documents import (
     DirectUploadOut,
     DirectUploadRequest,
     DocumentOut,
+    PassageOut,
 )
 from app.services.documents import DocumentService
 
@@ -100,6 +101,29 @@ async def get_document(
     document_id: uuid.UUID, membership: WorkspaceMembership, service: DocumentServiceDep
 ) -> DocumentOut:
     return await service.get(membership.workspace.id, document_id)
+
+
+@router.get("/{document_id}/passages")
+async def list_passages(
+    document_id: uuid.UUID,
+    membership: WorkspaceMembership,
+    service: DocumentServiceDep,
+    params: PageParamsDep,
+) -> Page[PassageOut]:
+    """The document's indexed passages in reading order: the text the Assistant cites."""
+    return await service.passages(membership.workspace.id, document_id, params)
+
+
+@router.post("/{document_id}/reprocess", status_code=status.HTTP_202_ACCEPTED)
+async def reprocess_document(
+    document_id: uuid.UUID,
+    user: CurrentUser,
+    membership: OwnerMembership,
+    service: DocumentServiceDep,
+) -> DocumentOut:
+    """Owner only. Queue a FAILED document for processing again (409 `document_not_failed`
+    for any other status); the response is the document, now UPLOADED."""
+    return await service.reprocess(user, membership.workspace.id, document_id)
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)

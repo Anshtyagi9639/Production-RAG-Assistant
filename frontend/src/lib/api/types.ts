@@ -197,3 +197,24 @@ export interface Stats {
     total: number
   }
 }
+
+/** GET /api/health. "worker" is informational: the API works without it, but uploads wait. */
+export interface HealthReport {
+  status: "ok" | "degraded"
+  checks: Record<
+    string,
+    {
+      status: "ok" | "unavailable"
+      latency_ms: number
+      error: "timeout" | "unreachable" | "authentication_failed" | "not_running" | null
+    }
+  >
+}
+
+/** GET /api/documents/{id}/passages: one indexed passage, in reading order. */
+export interface Passage {
+  chunk_index: number
+  page: number | null
+  text: string
+  token_count: number
+}

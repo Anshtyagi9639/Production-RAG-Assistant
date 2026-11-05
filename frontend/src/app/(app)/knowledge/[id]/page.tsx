@@ -1,18 +1,30 @@
 "use client"
 
-import { useMutation, useQuery } from "@tanstack/react-query"
-import { ArrowLeft, Check, CircleAlert, Loader2, Search, SearchX } from "lucide-react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  ArrowLeft,
+  Check,
+  CircleAlert,
+  Clock,
+  Loader2,
+  RotateCcw,
+  Search,
+  SearchX,
+} from "lucide-react"
 import Link from "next/link"
-import { useParams, useRouter } from "next/navigation"
-import { useState } from "react"
+import { useParams, useRouter, useSearchParams } from "next/navigation"
+import { Suspense, useState } from "react"
+import { toast } from "sonner"
 
 import { useBreadcrumb } from "@/components/app/breadcrumb"
 import { useWorkspace } from "@/components/app/workspace-context"
 import { DeleteDocumentDialog } from "@/components/documents/delete-document-dialog"
 import { FileTypeIcon } from "@/components/documents/file-type-icon"
+import { Passages } from "@/components/documents/passages"
 import { isInProgress, StatusBadge } from "@/components/documents/status-badge"
 import { PageHeader } from "@/components/page-header"
-import { EmptyState, ErrorState, ListSkeleton } from "@/components/states"
+import { useWorkerRunning } from "@/components/dashboard/system-status"
+import { EmptyState, ErrorState, errorMessage, ListSkeleton } from "@/components/states"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -24,6 +36,7 @@ import {
   fileKind,
   formatBytes,
   formatDateTime,
+  formatElapsed,
   formatLocation,
   formatRelative,
   plural,
@@ -32,6 +45,15 @@ import { queryKeys } from "@/lib/query-keys"
 import { cn } from "@/lib/utils"
 
 const POLL_INTERVAL_MS = 3000
+// A queued document normally starts within seconds; past this, the worker is likely down.
+const STALLED_AFTER_MS = 60_000
+
+function isStalled(document: Document, now: number): boolean {
+  return (
+    document.status === "UPLOADED" &&
+    now - new Date(document.created_at).getTime() > STALLED_AFTER_MS
+  )
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -89,16 +111,20 @@ function Pipeline({ document }: { document: Document }) {
           ? `${plural(document.chunk_count ?? 0, "passage")}${document.page_count ? ` from ${plural(document.page_count, "page")}` : ""}`
           : status === "FAILED"
             ? "Stopped"
-            : "In progress",
+            : status === "PROCESSING"
+              ? "In progress"
+              : "Waiting to start",
       state: indexed,
     },
     {
       title: "Indexed for search and answers",
       detail: document.processed_at
-        ? formatDateTime(document.processed_at)
+        ? `${formatDateTime(document.processed_at)} · ready in ${formatElapsed(document.created_at, document.processed_at)}`
         : status === "FAILED"
           ? "Not indexed"
-          : "Waiting",
+          : status === "PROCESSING"
+            ? "In progress"
+            : "Waiting",
       state: indexed,
     },
   ]
@@ -119,7 +145,13 @@ function Pipeline({ document }: { document: Document }) {
           >
             {step.state === "done" && <Check className="size-3.5" aria-label="Done" />}
             {step.state === "active" && (
-              <Loader2 className="size-3.5 animate-spin" aria-label="In progress" />
+              <>
+                <span
+                  className="absolute inset-0 animate-ping rounded-full bg-info/20 [animation-duration:1.6s]"
+                  aria-hidden
+                />
+                <Loader2 className="size-3.5 animate-spin" aria-label="In progress" />
+              </>
             )}
             {step.state === "failed" && <CircleAlert className="size-3.5" aria-label="Failed" />}
             {step.state === "waiting" && (
@@ -133,6 +165,52 @@ function Pipeline({ document }: { document: Document }) {
         </li>
       ))}
     </ol>
+  )
+}
+
+/** Passages, focused on `?passage=n` when opened from a citation or search result. */
+function DocumentPassages({
+  workspaceId,
+  documentId,
+}: {
+  workspaceId: string
+  documentId: string
+}) {
+  const raw = useSearchParams().get("passage")
+  const focus = raw !== null && /^\d+$/.test(raw) ? Number(raw) : null
+  return <Passages key={focus} workspaceId={workspaceId} documentId={documentId} focus={focus} />
+}
+
+/** Queue a failed document again (owner only); the stored file is reused. */
+function RetryProcessing({ workspaceId, document }: { workspaceId: string; document: Document }) {
+  const queryClient = useQueryClient()
+  const retry = useMutation({
+    mutationFn: () => documentsApi.reprocess(workspaceId, document.id),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(queryKeys.document(workspaceId, document.id), updated)
+      toast.success("Processing queued again", {
+        description: "The status updates on this page automatically.",
+      })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workspace(workspaceId) })
+    },
+    onError: (error) =>
+      toast.error("Couldn't retry processing", { description: errorMessage(error) }),
+  })
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      className="mt-3 text-foreground"
+      onClick={() => retry.mutate()}
+      disabled={retry.isPending}
+    >
+      {retry.isPending ? (
+        <Loader2 className="animate-spin" aria-hidden />
+      ) : (
+        <RotateCcw aria-hidden />
+      )}
+      Retry processing
+    </Button>
   )
 }
 
@@ -224,6 +302,9 @@ export default function DocumentPage() {
       query.state.data && isInProgress(query.state.data.status) ? POLL_INTERVAL_MS : false,
   })
   useBreadcrumb(document.data?.filename)
+  // Re-evaluated on each poll, so the stalled notice appears without a reload.
+  const now = document.dataUpdatedAt
+  const workerRunning = useWorkerRunning()
 
   return (
     <>
@@ -275,18 +356,38 @@ export default function DocumentPage() {
               <CircleAlert aria-hidden />
               <AlertTitle>Processing failed</AlertTitle>
               <AlertDescription>
-                {document.data.error_message ?? "No reason was recorded."}
+                <p>{document.data.error_message ?? "No reason was recorded."}</p>
+                {workspace.role === "owner" && (
+                  <RetryProcessing workspaceId={workspace.id} document={document.data} />
+                )}
               </AlertDescription>
             </Alert>
           )}
-          {isInProgress(document.data.status) && (
-            <Alert className="mb-6 border-info/30 bg-info/5">
-              <Loader2 className="animate-spin text-info" aria-hidden />
-              <AlertTitle>Processing</AlertTitle>
+          {isInProgress(document.data.status) &&
+          (workerRunning === false || isStalled(document.data, now)) ? (
+            <Alert className="mb-6 border-warning/40 bg-warning/5">
+              <Clock className="text-warning" aria-hidden />
+              <AlertTitle>
+                {workerRunning === false
+                  ? "The processing worker isn't running"
+                  : "Still waiting to start"}
+              </AlertTitle>
               <AlertDescription aria-live="polite">
-                The document is being extracted and indexed. This page updates automatically.
+                {workerRunning === false
+                  ? "This document is queued and will be processed automatically as soon as the worker starts. Nothing is lost."
+                  : "Processing usually starts within seconds. Once the worker picks this document up, this page updates automatically."}
               </AlertDescription>
             </Alert>
+          ) : (
+            isInProgress(document.data.status) && (
+              <Alert className="mb-6 border-info/30 bg-info/5">
+                <Loader2 className="animate-spin text-info" aria-hidden />
+                <AlertTitle>Processing</AlertTitle>
+                <AlertDescription aria-live="polite">
+                  The document is being extracted and indexed. This page updates automatically.
+                </AlertDescription>
+              </Alert>
+            )
           )}
 
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -297,6 +398,13 @@ export default function DocumentPage() {
               <Section title="Processing">
                 <Pipeline document={document.data} />
               </Section>
+              {document.data.status === "COMPLETED" && (
+                <Section title="Passages">
+                  <Suspense fallback={<ListSkeleton rows={3} label="Loading passages" />}>
+                    <DocumentPassages workspaceId={workspace.id} documentId={document.data.id} />
+                  </Suspense>
+                </Section>
+              )}
             </div>
             <Section title="Details">
               <Details document={document.data} />

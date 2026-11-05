@@ -1,5 +1,10 @@
+import { ArrowUpRight } from "lucide-react"
+import Link from "next/link"
+
+import { FileTypeIcon } from "@/components/documents/file-type-icon"
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
 import type { Source } from "@/lib/api/types"
-import { formatLocation } from "@/lib/format"
+import { cleanSnippet, formatLocation, formatScore } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 // Inline tokens: **bold**, `code` and [n] citations.
@@ -13,7 +18,8 @@ function isChip(node: React.ReactNode): node is React.ReactElement {
     typeof node === "object" &&
     node !== null &&
     "props" in node &&
-    (node.props as Record<string, unknown>)["data-citation"] !== undefined
+    ((node as React.ReactElement).type === CitationPreview ||
+      (node.props as Record<string, unknown>)["data-citation"] !== undefined)
   )
 }
 
@@ -47,6 +53,46 @@ function toBlocks(text: string): Block[] {
     else blocks.push({ kind: "paragraph", lines: [line] })
   }
   return blocks.filter((block) => block.kind !== "paragraph" || block.lines.length > 0)
+}
+
+/**
+ * A preview of the cited passage on hover or keyboard focus, so it can be checked without
+ * leaving the answer. Clicking the marker still selects it in the Sources panel (a sheet on
+ * small screens, which also covers touch, where hover doesn't exist).
+ */
+function CitationPreview({ source, children }: { source: Source; children: React.ReactElement }) {
+  return (
+    <HoverCard openDelay={250} closeDelay={120}>
+      <HoverCardTrigger asChild>{children}</HoverCardTrigger>
+      <HoverCardContent side="top" className="space-y-2.5">
+        <div className="flex items-start gap-2.5">
+          <span className="flex size-5 shrink-0 items-center justify-center rounded-md border border-primary/20 bg-accent text-[10.5px] font-semibold text-accent-foreground tabular-nums">
+            {source.index}
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="flex items-center gap-1.5 text-sm font-medium">
+              <FileTypeIcon filename={source.filename} className="size-5 rounded [&_svg]:size-3" />
+              <span className="truncate">{source.filename}</span>
+            </p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {formatLocation(source.page, source.chunk_index)} · relevance{" "}
+              <span className="tabular-nums">{formatScore(source.score)}</span>
+            </p>
+          </div>
+        </div>
+        <blockquote className="line-clamp-6 border-l-2 border-primary/25 pl-3 text-xs leading-relaxed text-muted-foreground">
+          {cleanSnippet(source.snippet)}
+        </blockquote>
+        <Link
+          href={`/knowledge/${source.document_id}?passage=${source.chunk_index}`}
+          className="inline-flex items-center gap-1 text-xs font-medium text-primary underline-offset-2 hover:underline"
+        >
+          Open passage in document
+          <ArrowUpRight className="size-3.5" aria-hidden />
+        </Link>
+      </HoverCardContent>
+    </HoverCard>
+  )
 }
 
 /**
@@ -120,19 +166,20 @@ export function CitationText({
       if (citation && source) {
         const index = Number(citation[1])
         return (
-          <button
-            key={key}
-            data-citation=""
-            type="button"
-            onClick={() => onCite(index)}
-            aria-label={`Source ${index}: ${source.filename}, ${formatLocation(source.page, source.chunk_index)}`}
-            className={cn(
-              "mx-0.5 inline-flex h-[1.15rem] min-w-[1.15rem] items-center justify-center rounded-md border border-primary/20 bg-accent px-1 align-[0.1em] text-[10.5px] leading-none font-semibold text-accent-foreground tabular-nums transition-colors hover:border-primary/50 hover:bg-primary hover:text-primary-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-              activeIndex === index && "border-primary bg-primary text-primary-foreground",
-            )}
-          >
-            {index}
-          </button>
+          <CitationPreview key={key} source={source}>
+            <button
+              data-citation=""
+              type="button"
+              onClick={() => onCite(index)}
+              aria-label={`Source ${index}: ${source.filename}, ${formatLocation(source.page, source.chunk_index)}`}
+              className={cn(
+                "mx-0.5 inline-flex h-[1.15rem] min-w-[1.15rem] items-center justify-center rounded-md border border-primary/20 bg-accent px-1 align-[0.1em] text-[10.5px] leading-none font-semibold text-accent-foreground tabular-nums transition-colors hover:border-primary/50 hover:bg-primary hover:text-primary-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                activeIndex === index && "border-primary bg-primary text-primary-foreground",
+              )}
+            >
+              {index}
+            </button>
+          </CitationPreview>
         )
       }
       return part

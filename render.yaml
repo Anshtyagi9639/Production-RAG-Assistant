@@ -1,0 +1,51 @@
+# Render Blueprint: the arq worker that processes uploads (extract → chunk → embed → index) and
+# runs agent jobs. Vercel serves the frontend and API (vercel.json) but has no long-running
+# process for it. Steps and every variable: docs/vercel-deployment-readiness.md (§10, §11).
+#
+# sync: false values are entered in the Render dashboard when the Blueprint is created; they are
+# never stored in this file. Use the same values as the Vercel project, so both read the same
+# database, queue, vector index and bucket.
+services:
+  - type: worker
+    name: copilot-worker
+    runtime: python
+    rootDir: backend
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m arq app.workers.settings.WorkerSettings
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      # Shared with the API on Vercel.
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DATABASE
+        sync: false
+      - key: MONGODB_MAX_POOL_SIZE
+        value: "10"
+      - key: REDIS_URL
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: JWT_SECRET_KEY
+        sync: false
+      # The worker reads the files the API stored, so both must use the same bucket: the API on
+      # Vercel has no disk the worker could read.
+      - key: STORAGE_BACKEND
+        value: s3
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false

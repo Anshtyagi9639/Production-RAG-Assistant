@@ -1,13 +1,15 @@
 "use client"
 
-import { BookOpenText, Info, Sparkles } from "lucide-react"
+import { BookOpenText, Check, Copy, Info, Sparkles } from "lucide-react"
 import Link from "next/link"
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
+import { toast } from "sonner"
 
 import { CitationText } from "@/components/citations/citation-text"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { ChatMessage, Source } from "@/lib/api/types"
+import { formatLocation } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 export interface Citation {
@@ -105,6 +107,45 @@ function SourceChips({
   )
 }
 
+/** The answer as plain text, with its numbered sources listed after it. */
+function answerWithSources(message: ChatMessage): string {
+  if (message.sources.length === 0) return message.content
+  const sources = message.sources.map(
+    (source) =>
+      `[${source.index}] ${source.filename}, ${formatLocation(source.page, source.chunk_index)}`,
+  )
+  return [message.content, "", "Sources:", ...sources].join("\n")
+}
+
+function CopyAnswer({ message }: { message: ChatMessage }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 2000)
+    return () => clearTimeout(timer)
+  }, [copied])
+  return (
+    <Button
+      variant="ghost"
+      size="xs"
+      className="text-muted-foreground"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(answerWithSources(message))
+          setCopied(true)
+        } catch {
+          toast.error("Couldn't copy the answer", {
+            description: "Your browser blocked clipboard access.",
+          })
+        }
+      }}
+    >
+      {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+      <span aria-live="polite">{copied ? "Copied" : "Copy"}</span>
+    </Button>
+  )
+}
+
 function AssistantMessage({
   message,
   citation,
@@ -131,13 +172,18 @@ function AssistantMessage({
               activeIndex={selected ? citation.sourceIndex : null}
               onCite={(sourceIndex) => onCite({ messageId: message.id, sourceIndex })}
             />
-            {message.sources.length > 0 && (
-              <SourceChips
-                sources={message.sources}
-                activeIndex={selected ? citation.sourceIndex : null}
-                onSelect={(sourceIndex) => onCite({ messageId: message.id, sourceIndex })}
-              />
-            )}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {message.sources.length > 0 ? (
+                <SourceChips
+                  sources={message.sources}
+                  activeIndex={selected ? citation.sourceIndex : null}
+                  onSelect={(sourceIndex) => onCite({ messageId: message.id, sourceIndex })}
+                />
+              ) : (
+                <span />
+              )}
+              <CopyAnswer message={message} />
+            </div>
           </>
         )}
       </div>

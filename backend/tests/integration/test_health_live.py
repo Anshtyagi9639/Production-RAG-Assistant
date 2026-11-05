@@ -19,8 +19,12 @@ async def test_health_is_green_against_real_services() -> None:
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "ok"
-    assert {name: check["status"] for name, check in body["checks"].items()} == {
+    checks = body["checks"]
+    assert {name: checks[name]["status"] for name in ("mongodb", "redis", "qdrant")} == {
         "mongodb": "ok",
         "redis": "ok",
         "qdrant": "ok",
     }
+    # Reported whether or not a worker is running here; it never turns the API's health red.
+    assert set(checks) == {"mongodb", "redis", "qdrant", "worker"}
+    assert checks["worker"]["status"] in {"ok", "unavailable"}

@@ -7,6 +7,15 @@ from app.models import Document
 from app.models.enums import DocumentStatus
 
 
+class PassageOut(BaseModel):
+    """One indexed passage (chunk) of a document, as the Assistant and search cite it."""
+
+    chunk_index: int
+    page: int | None
+    text: str
+    token_count: int
+
+
 class DocumentOut(BaseModel):
     id: uuid.UUID
     filename: str

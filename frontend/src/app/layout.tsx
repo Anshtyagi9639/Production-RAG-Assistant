@@ -2,6 +2,7 @@ import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 
 import { Providers } from "@/app/providers"
+import { THEME_INIT_SCRIPT } from "@/lib/theme-script"
 import { cn } from "@/lib/utils"
 
 import "./globals.css"
@@ -16,7 +17,15 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={cn("font-sans", geist.variable, geistMono.variable)}>
+    // The theme script sets the "dark" class before React hydrates, so the attribute differs.
+    <html
+      lang="en"
+      className={cn("font-sans", geist.variable, geistMono.variable)}
+      suppressHydrationWarning
+    >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       <body>
         <Providers>{children}</Providers>
       </body>

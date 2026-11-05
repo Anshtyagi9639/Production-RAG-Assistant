@@ -23,13 +23,54 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "DELETE"
+  method?: "GET" | "POST" | "PATCH" | "DELETE"
   json?: unknown
   form?: FormData
   query?: Record<string, QueryValue>
   /** Sent as X-Workspace-Id; the backend verifies membership for every tenant route. */
   workspaceId?: string
   signal?: AbortSignal
+  /** Called with the fraction of the request body sent (0-1); used for file uploads. */
+  onUploadProgress?: UploadProgress
+}
+
+export type UploadProgress = (fraction: number) => void
+
+/**
+ * fetch() can't report upload progress, so requests that need it go through XMLHttpRequest.
+ * The result is wrapped in a Response so callers handle both transports the same way; like
+ * fetch, it rejects only when no response arrives.
+ */
+function sendWithProgress(
+  url: URL | string,
+  init: { method: string; headers?: Headers; body?: BodyInit; signal?: AbortSignal },
+  onProgress: UploadProgress,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open(init.method, url)
+    init.headers?.forEach((value, name) => xhr.setRequestHeader(name, value))
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) onProgress(event.loaded / event.total)
+    }
+    xhr.onload = () => {
+      const headers = new Headers()
+      for (const line of xhr
+        .getAllResponseHeaders()
+        .trim()
+        .split(/[\r\n]+/)) {
+        const separator = line.indexOf(":")
+        if (separator > 0)
+          headers.append(line.slice(0, separator), line.slice(separator + 1).trim())
+      }
+      const empty = xhr.status === 204 || xhr.status === 205 || xhr.status === 304
+      resolve(new Response(empty ? null : xhr.responseText, { status: xhr.status, headers }))
+    }
+    xhr.onerror = () => reject(new TypeError("Network request failed"))
+    xhr.onabort = () => reject(new DOMException("The upload was cancelled.", "AbortError"))
+    init.signal?.addEventListener("abort", () => xhr.abort(), { once: true })
+    xhr.send(init.body as XMLHttpRequestBodyInit | null | undefined)
+  })
 }
 
 const FALLBACK_MESSAGES: Record<number, string> = {
@@ -87,12 +128,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
   let response: Response
   try {
-    response = await fetch(url, {
-      method: options.method ?? "GET",
-      headers,
-      body,
-      signal: options.signal,
-    })
+    const init = { method: options.method ?? "GET", headers, body, signal: options.signal }
+    response = options.onUploadProgress
+      ? await sendWithProgress(url, init, options.onUploadProgress)
+      : await fetch(url, init)
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error
     // fetch rejects when nothing answers at API_URL (backend stopped, wrong port) or when the
@@ -121,6 +160,7 @@ export async function uploadToBucket(
   url: string,
   fields: Record<string, string>,
   file: File,
+  onProgress?: UploadProgress,
 ): Promise<void> {
   const form = new FormData()
   for (const [name, value] of Object.entries(fields)) form.append(name, value)
@@ -129,7 +169,8 @@ export async function uploadToBucket(
 
   let response: Response
   try {
-    response = await fetch(url, { method: "POST", body: form })
+    const init = { method: "POST", body: form }
+    response = onProgress ? await sendWithProgress(url, init, onProgress) : await fetch(url, init)
   } catch {
     // Also how a bucket without a CORS rule for this site shows up in the browser.
     throw new ApiError(

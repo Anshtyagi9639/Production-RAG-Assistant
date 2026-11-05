@@ -1,6 +1,6 @@
 "use client"
 
-import { ChevronsUpDown, LogOut } from "lucide-react"
+import { ChevronsUpDown, LogOut, Monitor, Moon, Sun } from "lucide-react"
 
 import { useSignOut } from "@/components/app/use-sign-out"
 import { useWorkspace } from "@/components/app/workspace-context"
@@ -9,10 +9,19 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { type ThemePreference, useTheme } from "@/lib/theme"
 import { cn } from "@/lib/utils"
+
+const THEME_OPTIONS = [
+  { value: "light", label: "Light", icon: Sun },
+  { value: "dark", label: "Dark", icon: Moon },
+  { value: "system", label: "System", icon: Monitor },
+] as const
 
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean)
@@ -45,6 +54,7 @@ export function UserMenu({
 }) {
   const { me } = useWorkspace()
   const signOut = useSignOut()
+  const [theme, setTheme] = useTheme()
 
   return (
     <DropdownMenu>
@@ -77,6 +87,26 @@ export function UserMenu({
           </span>
           <span className="block truncate text-xs text-muted-foreground">{me.user.email}</span>
         </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+          Appearance
+        </DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={theme}
+          onValueChange={(value) => setTheme(value as ThemePreference)}
+        >
+          {THEME_OPTIONS.map(({ value, label, icon: Icon }) => (
+            <DropdownMenuRadioItem
+              key={value}
+              value={value}
+              // Keep the menu open so the change can be seen and compared.
+              onSelect={(event) => event.preventDefault()}
+            >
+              <Icon aria-hidden />
+              {label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={signOut}>
           <LogOut aria-hidden />

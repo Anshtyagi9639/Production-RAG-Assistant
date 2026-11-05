@@ -20,7 +20,13 @@ from app.repositories.workspaces import Membership, WorkspaceRepository
 from app.services.agent import AgentService
 from app.services.chat import ChatService
 from app.services.documents import DocumentService
-from app.services.health import HealthService, mongodb_check, qdrant_check, redis_check
+from app.services.health import (
+    HealthService,
+    mongodb_check,
+    qdrant_check,
+    redis_check,
+    worker_check,
+)
 from app.services.search import SearchService
 
 _bearer = HTTPBearer(auto_error=False)
@@ -175,6 +181,8 @@ def get_health_service(request: Request) -> HealthService:
             "mongodb": mongodb_check(state.mongo),
             "redis": redis_check(state.redis),
             "qdrant": qdrant_check(state.qdrant),
+            "worker": worker_check(state.redis),
         },
         timeout_seconds=state.settings.health_check_timeout_seconds,
+        informational=frozenset({"worker"}),
     )

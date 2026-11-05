@@ -96,15 +96,22 @@ class FakeLLM:
 class RecordingJobQueue:
     def __init__(self, error: Exception | None = None) -> None:
         self.jobs: list[ProcessDocumentJob] = []
+        self.attempts: list[str | None] = []
         self.agent_jobs: list[AgentRunJob] = []
         self.error = error
 
-    async def enqueue_document_processing(self, job: ProcessDocumentJob) -> bool:
+    async def enqueue_document_processing(
+        self, job: ProcessDocumentJob, attempt: str | None = None
+    ) -> bool:
         if self.error is not None:
             raise self.error
-        if any(queued.document_id == job.document_id for queued in self.jobs):
+        if any(
+            queued.document_id == job.document_id and queued_attempt == attempt
+            for queued, queued_attempt in zip(self.jobs, self.attempts, strict=True)
+        ):
             return False
         self.jobs.append(job)
+        self.attempts.append(attempt)
         return True
 
     async def enqueue_agent_run(self, job: AgentRunJob) -> bool:

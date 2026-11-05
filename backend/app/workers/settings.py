@@ -1,6 +1,9 @@
 """arq worker entry point: `arq app.workers.settings.WorkerSettings`."""
 
+import asyncio
 import dataclasses
+import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar
 
 from arq import func
@@ -20,20 +23,48 @@ from app.rag.indexing import VectorIndex, ensure_collection
 from app.repositories.document_store import MongoDocumentStore
 from app.services.agent import AgentRunner
 from app.services.document_processing import DocumentProcessor
+from app.services.health import WORKER_HEARTBEAT_SECONDS
 from app.services.queue import PROCESS_DOCUMENT_TASK, RUN_AGENT_TASK
 from app.storage import create_storage
 from app.workers.tasks import process_document, run_agent
 
 _settings = get_settings()
+logger = logging.getLogger(__name__)
+
+# Startup waits out a short outage (about two minutes in all) instead of exiting at once,
+# which would leave uploads queued with nothing to process them.
+STARTUP_ATTEMPTS = 8
+STARTUP_MAX_DELAY_SECONDS = 30
+
+
+async def _with_retries(dependency: str, step: Callable[[], Awaitable[None]]) -> None:
+    for attempt in range(1, STARTUP_ATTEMPTS + 1):
+        try:
+            await step()
+            return
+        except Exception as exc:
+            if attempt == STARTUP_ATTEMPTS:
+                raise
+            delay = min(2**attempt, STARTUP_MAX_DELAY_SECONDS)
+            logger.warning(
+                "worker_startup_retry",
+                extra={
+                    "dependency": dependency,
+                    "attempt": attempt,
+                    "error": type(exc).__name__,
+                    "retry_in_seconds": delay,
+                },
+            )
+            await asyncio.sleep(delay)
 
 
 async def startup(ctx: dict[str, Any]) -> None:
     configure_logging(_settings.log_level)
     configure_tracing(_settings)
     mongo = create_mongo(_settings, appname="copilot-worker")
-    await ensure_schema(mongo.db)
+    await _with_retries("mongodb", lambda: ensure_schema(mongo.db))
     qdrant = create_qdrant(_settings)
-    await ensure_collection(qdrant, _settings.embedding_dimensions)
+    await _with_retries("qdrant", lambda: ensure_collection(qdrant, _settings.embedding_dimensions))
     ctx["mongo"] = mongo
     ctx["qdrant"] = qdrant
     embedder = OpenAIEmbedder(_settings)
@@ -81,6 +112,8 @@ class WorkerSettings:
     ]
     on_startup = startup
     on_shutdown = shutdown
+    # The API's /api/health reports the worker from this heartbeat.
+    health_check_interval = WORKER_HEARTBEAT_SECONDS
     # Reconnect and retry when the cloud Redis drops a connection, instead of exiting.
     redis_settings = dataclasses.replace(
         RedisSettings.from_dsn(_settings.redis_url),

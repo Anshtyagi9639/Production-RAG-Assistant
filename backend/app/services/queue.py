@@ -32,8 +32,11 @@ class AgentRunJob(BaseModel):
 
 
 class JobQueue(Protocol):
-    async def enqueue_document_processing(self, job: ProcessDocumentJob) -> bool:
-        """Queue the job. Returns False if a job for this document already exists."""
+    async def enqueue_document_processing(
+        self, job: ProcessDocumentJob, attempt: str | None = None
+    ) -> bool:
+        """Queue the job. Returns False if a job for this document (and `attempt`, set when
+        a failed document is retried) already exists."""
         ...
 
     async def enqueue_agent_run(self, job: AgentRunJob) -> bool:
@@ -43,16 +46,20 @@ class JobQueue(Protocol):
 
 class ArqJobQueue:
     """Jobs in Redis via arq. The job id is derived from the document id, so a document can't
-    be queued twice while a job for it is pending or its result is still kept."""
+    be queued twice while a job for it is pending or its result is still kept. A retry of a
+    failed document adds its own `attempt` suffix, since the first job's result is kept."""
 
     def __init__(self, redis: "ArqRedis") -> None:
         self._redis = redis
 
-    async def enqueue_document_processing(self, job: ProcessDocumentJob) -> bool:
+    async def enqueue_document_processing(
+        self, job: ProcessDocumentJob, attempt: str | None = None
+    ) -> bool:
+        job_id = f"process-document:{job.document_id}"
         queued = await self._redis.enqueue_job(
             PROCESS_DOCUMENT_TASK,
             job.model_dump(mode="json"),
-            _job_id=f"process-document:{job.document_id}",
+            _job_id=job_id if attempt is None else f"{job_id}:{attempt}",
         )
         return queued is not None
 

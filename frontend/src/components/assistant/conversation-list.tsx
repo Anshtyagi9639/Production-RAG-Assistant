@@ -3,8 +3,10 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { MessagesSquare, SquarePen } from "lucide-react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { useState } from "react"
 
+import { ConversationActions } from "@/components/assistant/conversation-actions"
 import { Pagination } from "@/components/pagination"
 import { EmptyState, ErrorState } from "@/components/states"
 import { Button } from "@/components/ui/button"
@@ -25,6 +27,7 @@ export function ConversationList({
   activeId: string | null
   onNavigate?: () => void
 }) {
+  const router = useRouter()
   const [page, setPage] = useState(1)
   const conversations = useQuery({
     queryKey: queryKeys.conversations(workspaceId, page),
@@ -75,13 +78,16 @@ export function ConversationList({
               {conversations.data.items.map((conversation) => {
                 const active = conversation.id === activeId
                 return (
-                  <li key={conversation.id}>
+                  <li
+                    key={conversation.id}
+                    className="group/conversation relative flex items-center"
+                  >
                     <Link
                       href={`/assistant?c=${conversation.id}`}
                       onClick={onNavigate}
                       aria-current={active ? "page" : undefined}
                       className={cn(
-                        "block rounded-lg px-2.5 py-2 transition-colors outline-none hover:bg-sidebar-accent focus-visible:ring-3 focus-visible:ring-ring/50",
+                        "block min-w-0 flex-1 rounded-lg py-2 pr-9 pl-2.5 transition-colors outline-none hover:bg-sidebar-accent focus-visible:ring-3 focus-visible:ring-ring/50",
                         active && "bg-card shadow-xs ring-1 ring-border hover:bg-card",
                       )}
                     >
@@ -95,6 +101,15 @@ export function ConversationList({
                         {formatRelative(conversation.updated_at)}
                       </span>
                     </Link>
+                    <div className="absolute right-1.5">
+                      <ConversationActions
+                        workspaceId={workspaceId}
+                        conversation={conversation}
+                        onDeleted={() => {
+                          if (active) router.push("/assistant")
+                        }}
+                      />
+                    </div>
                   </li>
                 )
               })}

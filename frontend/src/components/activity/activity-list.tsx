@@ -7,6 +7,7 @@ import {
   type LucideIcon,
   MessageSquarePlus,
   MessageSquareText,
+  RotateCcw,
   Trash2,
   UserPlus,
 } from "lucide-react"
@@ -25,6 +26,11 @@ const ACTIONS: Record<string, { label: string; icon: LucideIcon; tone: Tone }> =
   "document.processed": { label: "finished processing", icon: CheckCircle2, tone: "success" },
   "document.failed": { label: "failed to process", icon: CircleAlert, tone: "danger" },
   "document.deleted": { label: "deleted", icon: Trash2, tone: "neutral" },
+  "document.reprocess_requested": {
+    label: "retried processing of",
+    icon: RotateCcw,
+    tone: "neutral",
+  },
   "conversation.created": {
     label: "started a conversation",
     icon: MessageSquarePlus,

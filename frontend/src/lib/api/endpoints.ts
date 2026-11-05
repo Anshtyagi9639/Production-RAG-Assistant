@@ -1,4 +1,4 @@
-import { ApiError, apiRequest, uploadToBucket } from "@/lib/api/client"
+import { ApiError, apiRequest, type UploadProgress, uploadToBucket } from "@/lib/api/client"
 import type {
   ActivityEntry,
   AgentRun,
@@ -9,8 +9,10 @@ import type {
   DirectUpload,
   Document,
   DocumentListParams,
+  HealthReport,
   Me,
   Page,
+  Passage,
   RegisterRequest,
   RegisterResponse,
   SearchRequest,
@@ -50,7 +52,7 @@ export const documentsApi = {
    * The file goes straight to the storage bucket when the backend offers it (deployments,
    * where the API can't take large request bodies), otherwise through the API.
    */
-  upload: async (workspaceId: string, file: File) => {
+  upload: async (workspaceId: string, file: File, onProgress?: UploadProgress) => {
     let direct: DirectUpload
     try {
       direct = await apiRequest<DirectUpload>("/documents/upload/direct", {
@@ -62,15 +64,31 @@ export const documentsApi = {
       if (!(error instanceof ApiError && error.code === "direct_upload_unavailable")) throw error
       const form = new FormData()
       form.append("file", file)
-      return apiRequest<Document>("/documents/upload", { method: "POST", form, workspaceId })
+      return apiRequest<Document>("/documents/upload", {
+        method: "POST",
+        form,
+        workspaceId,
+        onUploadProgress: onProgress,
+      })
     }
-    await uploadToBucket(direct.url, direct.fields, file)
+    await uploadToBucket(direct.url, direct.fields, file, onProgress)
     return apiRequest<Document>("/documents/upload/complete", {
       method: "POST",
       json: { upload_token: direct.upload_token },
       workspaceId,
     })
   },
+  passages: (workspaceId: string, id: string, page: number, pageSize: number) =>
+    apiRequest<Page<Passage>>(`/documents/${encodeURIComponent(id)}/passages`, {
+      workspaceId,
+      query: { page, page_size: pageSize },
+    }),
+  /** Owner only: queue a FAILED document again. */
+  reprocess: (workspaceId: string, id: string) =>
+    apiRequest<Document>(`/documents/${encodeURIComponent(id)}/reprocess`, {
+      method: "POST",
+      workspaceId,
+    }),
   remove: (workspaceId: string, id: string) =>
     apiRequest<void>(`/documents/${encodeURIComponent(id)}`, { method: "DELETE", workspaceId }),
 }
@@ -90,6 +108,17 @@ export const chatApi = {
     }),
   getConversation: (workspaceId: string, id: string) =>
     apiRequest<ConversationDetail>(`/conversations/${encodeURIComponent(id)}`, { workspaceId }),
+  renameConversation: (workspaceId: string, id: string, title: string) =>
+    apiRequest<ConversationSummary>(`/conversations/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      json: { title },
+      workspaceId,
+    }),
+  deleteConversation: (workspaceId: string, id: string) =>
+    apiRequest<void>(`/conversations/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      workspaceId,
+    }),
 }
 
 export const agentApi = {
@@ -105,6 +134,24 @@ export const activityApi = {
       workspaceId,
       query: { page, page_size: pageSize },
     }),
+}
+
+export const healthApi = {
+  /** The report even when degraded: the API answers 503 with the report as error details. */
+  get: async (): Promise<HealthReport> => {
+    try {
+      return await apiRequest<HealthReport>("/health")
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 503 && isHealthReport(error.details)) {
+        return error.details
+      }
+      throw error
+    }
+  },
+}
+
+function isHealthReport(value: unknown): value is HealthReport {
+  return typeof value === "object" && value !== null && "checks" in value && "status" in value
 }
 
 export const statsApi = {

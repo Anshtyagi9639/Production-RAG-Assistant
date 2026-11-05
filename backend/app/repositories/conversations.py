@@ -1,6 +1,8 @@
 import uuid
 from datetime import datetime
 
+from pymongo import ReturnDocument
+
 from app.core.pagination import PageParams
 from app.db.mongo import Database, Session
 from app.models import Conversation, Message
@@ -37,6 +39,27 @@ class ConversationRepository:
             .limit(params.page_size)
         )
         return [Conversation.from_document(item) async for item in cursor], total
+
+    async def rename(
+        self, workspace_id: uuid.UUID, user_id: uuid.UUID, conversation_id: uuid.UUID, title: str
+    ) -> Conversation | None:
+        """Only the title changes: updated_at orders the list by activity, not by edits."""
+        document = await self._conversations.find_one_and_update(
+            {"_id": conversation_id, **self._scope(workspace_id, user_id)},
+            {"$set": {"title": title}},
+            return_document=ReturnDocument.AFTER,
+        )
+        return Conversation.from_document(document) if document else None
+
+    async def delete(self, conversation: Conversation, session: Session) -> None:
+        """The conversation and its messages (no cascades in MongoDB), in one transaction."""
+        await self._messages.delete_many(
+            {"conversation_id": conversation.id, "workspace_id": conversation.workspace_id},
+            session=session,
+        )
+        await self._conversations.delete_one(
+            {"_id": conversation.id, "workspace_id": conversation.workspace_id}, session=session
+        )
 
     async def insert(self, conversation: Conversation, session: Session) -> None:
         await self._conversations.insert_one(conversation.to_document(), session=session)

@@ -1,4 +1,4 @@
-import { Bot, Quote, ShieldCheck } from "lucide-react"
+import { Bot, FileText, Quote, ShieldCheck } from "lucide-react"
 
 import { BrandMark, BrandName } from "@/components/brand"
 
@@ -19,6 +19,17 @@ const FEATURES = [
     text: "Documents and answers stay inside the workspace they belong to.",
   },
 ]
+
+const EXAMPLE_SOURCES = ["Travel policy.pdf · p. 4", "Expense handbook.docx · p. 12"]
+
+/** Decorative: a faint dot grid that fades out toward the edges. */
+function Backdrop() {
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,color-mix(in_oklch,var(--foreground)_12%,transparent)_1px,transparent_0)] [mask-image:radial-gradient(ellipse_at_center,black_20%,transparent_75%)] [background-size:22px_22px]" />
+    </div>
+  )
+}
 
 /** A static, labelled illustration of a cited answer (not live data). */
 function ExampleAnswer() {
@@ -47,6 +58,18 @@ function ExampleAnswer() {
         </span>
         .
       </p>
+      <ul className="mt-3 flex flex-wrap gap-1.5 border-t pt-3" aria-label="Sources">
+        {EXAMPLE_SOURCES.map((source, index) => (
+          <li
+            key={source}
+            className="flex items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-1 text-[11px] text-muted-foreground"
+          >
+            <span className="font-semibold text-accent-foreground">{index + 1}</span>
+            <FileText className="size-3" aria-hidden />
+            {source}
+          </li>
+        ))}
+      </ul>
     </figure>
   )
 }
@@ -55,11 +78,12 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
   return (
     <div className="grid min-h-svh grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <aside className="relative hidden flex-col justify-between overflow-hidden border-r bg-sidebar p-10 lg:flex">
-        <div className="flex items-center gap-2.5">
+        <Backdrop />
+        <div className="relative flex items-center gap-2.5">
           <BrandMark />
           <BrandName />
         </div>
-        <div className="mx-auto w-full max-w-md space-y-10">
+        <div className="relative mx-auto w-full max-w-md space-y-10">
           <div className="space-y-3">
             <h2 className="text-3xl font-semibold tracking-tight text-balance">
               Answers from your team&apos;s documents, with the sources to prove it.
@@ -84,7 +108,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
             ))}
           </ul>
         </div>
-        <p className="text-xs text-muted-foreground">
+        <p className="relative text-xs text-muted-foreground">
           Answers use only the documents in your workspace.
         </p>
       </aside>

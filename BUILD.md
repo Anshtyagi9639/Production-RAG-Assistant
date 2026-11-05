@@ -46,6 +46,9 @@
 - Found by the real-cloud tests and fixed: a single transient Qdrant Cloud error (idle connection dropped) permanently FAILED an upload, so Qdrant calls now retry transient errors (3 attempts, backoff, never on 4xx); the model sometimes returns the agent's `analysis` as an object, now flattened instead of failing the run; the Assistant didn't show a follow-up answer sent within 10 s of the previous one (stale `fetchQuery`); the app had no favicon (console 404). `CONTEXT_TOKEN_BUDGET` default aligned with the design (6000).
 - Windows: arq's Ctrl+C handling is not verified on Windows (arq can't install loop signal handlers there); deployment targets Linux, where arq handles SIGINT/SIGTERM. Hard-stopping the worker is safe: PROCESSING documents and RUNNING agent runs are re-claimed when the job is retried.
 - TEMPORARY (local dev): the API imports arq lazily (`create_arq_job_queue` in `app/services/queue.py`) so it can start where arq isn't installed. Then there is no job queue: uploads return 503 `processing_unavailable` and ARQ/Redis background processing is unavailable. arq stays in requirements.txt and the worker is unchanged. Restore the hard dependency before enabling Redis-backed processing.
+- Product upgrade (2026-11-05, uncommitted at time of writing). Verified locally against Atlas, Upstash, Qdrant Cloud and OpenAI: backend ruff, mypy, unit and integration suites; frontend prettier, tsc, eslint, `npm test`, `next build`; and an Edge run of login → upload → COMPLETED in ~9 s → corrupted PDF FAILED → retry → Assistant answer citing the right passage → citation opens that passage highlighted → rename and delete conversation → cleanup. Added: retry for FAILED documents; `GET /documents/{id}/passages` and a Passages section that citations and search results deep-link to (`?passage=n`); conversation rename/delete; worker heartbeat (`health_check_interval=30`, key `arq:queue:health-check`) reported by `/api/health` as informational, a System status panel on the dashboard, and a document-page notice when the worker isn't running; worker startup retries MongoDB/Qdrant for ~2 min instead of exiting; real byte-level upload progress; light/dark/system theme; copy answer with sources. Root cause of documents stuck "Queued": the worker had exited (it couldn't reach Atlas at startup) while the API kept running. The worker also exits once Redis retries are exhausted (seen 2026-11-05 when the machine's network dropped), so `start-dev.ps1` now restarts it in a loop; in production, use the host's restart policy.
+- Retrieval evaluation: `backend/scripts/eval_retrieval.py` with `backend/eval/seed_retrieval.json` (12 questions on the seeded workspace, 4 unanswerable). Result on 2026-11-05: at the configured threshold 0.30, hit@k 75% (6/8 answerable) and 100% of unanswerable questions rejected; at 0.20, hit@k 100% but 75% rejected. The seed corpus (4 passages) is too small to justify changing the threshold or adding hybrid search/reranking; re-run the script on a realistic labelled set before changing retrieval.
+- Not built, by decision: web research (no search provider is configured, and BUILD.md's MVP scope doesn't include it; needs a provider choice and API key from the user), conversation archive, answer feedback, analytics beyond the existing stats, integrations/settings pages. Not verified: the Vercel deployment (no CLI access), and that the deployed site has a worker (Vercel has no host for it; see docs/vercel-deployment-readiness.md).
 
 ---
 
@@ -193,14 +196,17 @@ Any node error → error node → status FAILED → END
 | POST | /api/documents/upload | 202, enqueues processing |
 | GET | /api/documents | paginated, sortable, filter by status |
 | GET/DELETE | /api/documents/{id} | delete removes file, chunks, Qdrant points |
+| GET | /api/documents/{id}/passages | indexed passages in reading order (paginated); citations deep-link here |
+| POST | /api/documents/{id}/reprocess | owner only; FAILED → UPLOADED and re-queued (409 otherwise) |
 | POST | /api/search | ranked chunks + snippet + score |
 | POST | /api/chat | create/continue conversation, answer + sources |
 | GET | /api/conversations, /api/conversations/{id} | paginated |
+| PATCH/DELETE | /api/conversations/{id} | rename / delete your own conversation (messages removed with it) |
 | POST | /api/agent/run | |
 | GET | /api/agent/runs/{id} | includes step trace |
 | GET | /api/activity | paginated |
 | GET | /api/stats | real dashboard numbers |
-| GET | /api/health | mongodb, redis, qdrant reported separately |
+| GET | /api/health | mongodb, redis, qdrant reported separately; `worker` (arq heartbeat) is informational and never fails the check |
 
 - Current workspace comes from the `X-Workspace-Id` header and is checked by one dependency. That dependency is the single tenant-isolation choke point.
 - Use correct status codes (201, 202, 204, 400, 401, 403/404, 413, 415, 422, 429 with `Retry-After`).

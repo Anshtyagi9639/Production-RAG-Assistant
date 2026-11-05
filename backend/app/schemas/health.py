@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-HealthError = Literal["timeout", "unreachable", "authentication_failed"]
+HealthError = Literal["timeout", "unreachable", "authentication_failed", "not_running"]
 
 
 class ComponentHealth(BaseModel):

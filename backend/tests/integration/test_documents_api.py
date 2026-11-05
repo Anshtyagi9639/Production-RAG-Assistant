@@ -115,6 +115,81 @@ async def test_worker_pipeline_completes_and_fails_documents_visible_through_the
     assert {p.payload["workspace_id"] for p in points} == {str(account.workspace_id)}  # type: ignore[index]
 
 
+async def test_a_failed_document_can_be_retried_and_then_completes(api: Api, mongo: Mongo) -> None:
+    account = await register(api.client, "retry@example.com")
+    document = await upload(api, account, "two_pages.pdf", fixture_bytes("two_pages.pdf"))
+    await run_queued_jobs(api)
+    # As after a transient failure (e.g. the embeddings API was down): the file is fine.
+    await mongo.db["documents"].update_one(
+        {"_id": uuid.UUID(str(document["id"]))},
+        {"$set": {"status": "FAILED", "error_message": "Embeddings are unavailable."}},
+    )
+    url = f"/api/documents/{document['id']}/reprocess"
+
+    response = await api.client.post(url, headers=account.headers())
+    again = await api.client.post(url, headers=account.headers())
+
+    assert response.status_code == 202
+    assert (response.json()["status"], response.json()["error_message"]) == ("UPLOADED", None)
+    # The second request finds it no longer FAILED, so only one job was queued.
+    assert (again.status_code, again.json()["error"]["code"]) == (409, "document_not_failed")
+    [job] = api.queue.jobs
+    assert str(job.document_id) == document["id"]
+    assert api.queue.attempts[0] is not None
+    activity = await mongo.db["activity_logs"].find_one({"action": "document.reprocess_requested"})
+    assert activity is not None
+    assert activity["details"] == {"filename": "two_pages.pdf"}
+
+    await run_queued_jobs(api)
+
+    final = await api.client.get(f"/api/documents/{document['id']}", headers=account.headers())
+    assert final.json()["status"] == "COMPLETED"
+    assert final.json()["chunk_count"] == 2
+    points, _ = await api.qdrant.scroll(COLLECTION)
+    # Re-processing overwrote the vectors instead of duplicating them.
+    assert len(points) == 2
+
+
+async def test_passages_list_the_indexed_text_in_reading_order(api: Api) -> None:
+    alice = await register(api.client, "pa@example.com")
+    bob = await register(api.client, "pb@example.com")
+    document = await upload(api, alice, "two_pages.pdf", fixture_bytes("two_pages.pdf"))
+    await run_queued_jobs(api)
+    url = f"/api/documents/{document['id']}/passages"
+
+    first = await api.client.get(url, params={"page_size": 1}, headers=alice.headers())
+    second = await api.client.get(url, params={"page": 2, "page_size": 1}, headers=alice.headers())
+    foreign = await api.client.get(url, headers=bob.headers())
+
+    assert first.status_code == 200
+    assert (first.json()["total"], first.json()["pages"]) == (2, 2)
+    [one] = first.json()["items"]
+    [two] = second.json()["items"]
+    assert (one["chunk_index"], one["page"]) == (0, 1)
+    assert (two["chunk_index"], two["page"]) == (1, 2)
+    assert one["text"]
+    assert one["token_count"] > 0
+    assert (foreign.status_code, foreign.json()["error"]["code"]) == (404, "document_not_found")
+
+
+async def test_only_owners_of_the_workspace_can_retry_a_document(api: Api, mongo: Mongo) -> None:
+    alice = await register(api.client, "ra2@example.com")
+    bob = await register(api.client, "rb2@example.com")
+    document = await upload(api, alice, "a.txt", b"hello")
+    await mongo.db["documents"].update_one(
+        {"_id": uuid.UUID(str(document["id"]))}, {"$set": {"status": "FAILED"}}
+    )
+
+    foreign = await api.client.post(
+        f"/api/documents/{document['id']}/reprocess", headers=bob.headers()
+    )
+
+    assert (foreign.status_code, foreign.json()["error"]["code"]) == (404, "document_not_found")
+    stored = await mongo.db["documents"].find_one({"_id": uuid.UUID(str(document["id"]))})
+    assert stored is not None
+    assert stored["status"] == "FAILED"
+
+
 async def test_list_is_paginated_sorted_filtered_and_scoped_to_the_workspace(api: Api) -> None:
     alice = await register(api.client, "la@example.com")
     bob = await register(api.client, "lb@example.com")

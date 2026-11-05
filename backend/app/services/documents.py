@@ -19,7 +19,7 @@ from app.models.enums import DocumentStatus
 from app.rag.indexing import VectorIndex
 from app.repositories.activity import ActivityRepository
 from app.repositories.documents import DocumentRepository
-from app.schemas.documents import DirectUploadOut, DocumentOut
+from app.schemas.documents import DirectUploadOut, DocumentOut, PassageOut
 from app.services.queue import JobQueue, ProcessDocumentJob
 from app.services.uploads import (
     HEAD_SAMPLE_BYTES,
@@ -195,10 +195,44 @@ class DocumentService:
 
         await self._mongo.transaction(work)
 
-    async def _enqueue(self, queue: JobQueue, document: Document) -> None:
+    async def reprocess(
+        self, user: User, workspace_id: uuid.UUID, document_id: uuid.UUID
+    ) -> DocumentOut:
+        """Queue a FAILED document again. The stored file is reused; the worker overwrites any
+        earlier chunks and vectors, so a retry never duplicates them."""
+        queue = self._require_queue()
+
+        async def work(session: Session) -> Document | None:
+            document = await self._documents.requeue_failed(workspace_id, document_id, session)
+            if document is not None:
+                await self._activity.record(
+                    workspace_id=workspace_id,
+                    user_id=user.id,
+                    action="document.reprocess_requested",
+                    entity_type="document",
+                    entity_id=document_id,
+                    details={"filename": document.filename},
+                    session=session,
+                )
+            return document
+
+        document = await self._mongo.transaction(work)
+        if document is None:
+            if await self._documents.get(workspace_id, document_id) is None:
+                raise DOCUMENT_NOT_FOUND
+            raise AppError(
+                409, "document_not_failed", "Only documents whose processing failed can be retried."
+            )
+        await self._enqueue(queue, document, attempt=uuid.uuid4().hex)
+        return await self.get(workspace_id, document_id)
+
+    async def _enqueue(
+        self, queue: JobQueue, document: Document, attempt: str | None = None
+    ) -> None:
         try:
             await queue.enqueue_document_processing(
-                ProcessDocumentJob(document_id=document.id, workspace_id=document.workspace_id)
+                ProcessDocumentJob(document_id=document.id, workspace_id=document.workspace_id),
+                attempt,
             )
         except Exception as exc:
             logger.exception("enqueue_failed", extra={"document_id": str(document.id)})
@@ -226,6 +260,26 @@ class DocumentService:
         if row is None:
             raise DOCUMENT_NOT_FOUND
         return DocumentOut.build(*row)
+
+    async def passages(
+        self, workspace_id: uuid.UUID, document_id: uuid.UUID, params: PageParams
+    ) -> Page[PassageOut]:
+        if await self._documents.get(workspace_id, document_id) is None:
+            raise DOCUMENT_NOT_FOUND
+        items, total = await self._documents.passages(workspace_id, document_id, params)
+        return Page[PassageOut].build(
+            [
+                PassageOut(
+                    chunk_index=item["chunk_index"],
+                    page=item.get("page"),
+                    text=item["text"],
+                    token_count=item["token_count"],
+                )
+                for item in items
+            ],
+            total,
+            params,
+        )
 
     async def delete(self, user: User, workspace_id: uuid.UUID, document_id: uuid.UUID) -> None:
         """Remove vectors first: if that fails nothing is deleted, so no document can linger

@@ -17,9 +17,19 @@ import { cn } from "@/lib/utils"
  * (legend totals, tooltip, table view).
  */
 export const SERIES = [
-  { key: "documents", action: "document.uploaded", label: "Documents added", color: "#2a78d6" },
-  { key: "questions", action: "chat.answered", label: "Questions answered", color: "#eb6834" },
-  { key: "agent", action: "agent.run_started", label: "Agent runs", color: "#1baf7a" },
+  {
+    key: "documents",
+    action: "document.uploaded",
+    label: "Documents added",
+    color: "var(--chart-1)",
+  },
+  {
+    key: "questions",
+    action: "chat.answered",
+    label: "Questions answered",
+    color: "var(--chart-2)",
+  },
+  { key: "agent", action: "agent.run_started", label: "Agent runs", color: "var(--chart-3)" },
 ] as const
 
 type SeriesKey = (typeof SERIES)[number]["key"]

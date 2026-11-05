@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models import AgentRun, Conversation, Message
 from app.models.enums import AgentRunStatus
@@ -51,6 +51,17 @@ class ChatMessageOut(BaseModel):
 class ChatResponse(BaseModel):
     conversation_id: uuid.UUID
     message: ChatMessageOut
+
+
+class RenameConversationRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+    @field_validator("title")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("The title can't be blank.")
+        return value
 
 
 class ConversationSummary(BaseModel):

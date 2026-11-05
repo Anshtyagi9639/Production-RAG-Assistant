@@ -177,6 +177,11 @@ In that case, set the Vercel project's Root Directory to `frontend/`. Also set `
 
 **Recommendation:** B for anything holding real or sensitive documents. A only if you explicitly accept the risk for a personal demo. Option A is **not** the default.
 
+**Decision (2026-11-05):** the owner chose **option A** (`0.0.0.0/0`). MongoDB's own Vercel integration documents the same entry for Vercel's dynamic IPs. This also ends the local "service unavailable" errors each time the dev machine's IP changes (106.219.155.77 most recently). Do these before adding the entry:
+- [ ] **Rotate the database password** (Atlas → Database Access → Edit → Edit Password → Autogenerate). An Atlas password appeared earlier in this project's history, so treat the current one as exposed. Put the new one in `MONGODB_URI` in the root `.env`, Vercel and Render.
+- [ ] Use a dedicated production user with `readWrite@copilot` only, never `atlasAdmin`.
+- [ ] Then add `0.0.0.0/0` under Network Access. The single-IP entries become redundant and can be deleted.
+
 Atlas checklist, whichever option you pick:
 - [ ] A dedicated database user per environment, with the `readWrite@copilot` role.
 - [ ] A connection string that uses `mongodb+srv://`. TLS is on by default; do not disable it.
@@ -278,6 +283,13 @@ The worker is a long-running process that polls Redis. It cannot run in a Vercel
 
 Increase `WORKER_JOB_TIMEOUT_SECONDS` (default 600) if very large PDFs time out during embedding.
 
+**Decision (2026-11-05): Render.** [`render.yaml`](../render.yaml) at the repository root defines a background worker (`copilot-worker`, Python 3.12, `rootDir: backend`, `python -m arq app.workers.settings.WorkerSettings`). Background workers are a paid Render instance type; check current pricing on render.com. To create it:
+1. render.com → **New → Blueprint** → connect the GitHub repository `Anshtyagi9639/Production-RAG-Assistant` and pick the branch to deploy.
+2. Render reads `render.yaml` and asks for every `sync: false` value. Enter the **same** values as on Vercel: Mongo, Redis, Qdrant, OpenAI, JWT and the S3 bucket.
+3. After the first deploy, the worker's logs should end with `Starting worker for 2 functions`, and the site's `/api/health` should report `worker: ok` within 30 seconds (the heartbeat).
+
+If the worker loses Redis or MongoDB for longer than its retries, it exits and Render restarts it. The heartbeat makes any gap visible in `/api/health` and on the dashboard.
+
 | Host option | Notes |
 |---|---|
 | A container host with a static egress IP (for example Railway, Render, Fly.io) | Recommended. Co-host the API there under Atlas option B. Free tiers, sleep policies and static-IP pricing change often: **verify before choosing.** A worker must not sleep. |
@@ -372,7 +384,7 @@ Run on 2026-11-02 on Windows 11, Python 3.12 venv, Node 20.
    - Add your current IP range to Atlas.
    - Run `cd backend && python -m pytest -m integration`. All tests should pass, including the 8 new direct-upload tests.
    - Optionally, set `STORAGE_BACKEND=s3` with the real bucket in `.env`, run `start-dev.ps1`, upload a PDF larger than 5 MB in the UI, and confirm it reaches **Ready**.
-5. **Worker:** deploy the `backend/Dockerfile` image with the command `arq app.workers.settings.WorkerSettings` and the variables in [§11](#11-environment-variable-checklist). Check its logs for a clean startup.
+5. **Worker:** create the Render Blueprint from `render.yaml` ([§10](#10-external-worker-deployment-instructions)) with the variables in [§11](#11-environment-variable-checklist). Check its logs for a clean startup.
 6. **Vercel project:**
    - Run `npm i -g vercel`, then `vercel login`, then `vercel link` from the repository root.
    - Under option A, keep the current `vercel.json`. Under option B, use the frontend-only variant.

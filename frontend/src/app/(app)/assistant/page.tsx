@@ -1,7 +1,15 @@
 "use client"
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { BookMarked, PanelLeft, Quote, Sparkles } from "lucide-react"
+import {
+  BadgeCheck,
+  BookMarked,
+  CalendarClock,
+  ListChecks,
+  PanelLeft,
+  Quote,
+  Sparkles,
+} from "lucide-react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Suspense, useState } from "react"
 
@@ -27,9 +35,9 @@ import { queryKeys } from "@/lib/query-keys"
 
 // Prompts that work against any knowledge base; selecting one only fills the composer.
 const STARTERS = [
-  "Summarize the main rules in our documents",
-  "What deadlines are mentioned in our documents?",
-  "Which documents mention approvals, and what do they require?",
+  { icon: ListChecks, prompt: "Summarize the main rules in our documents" },
+  { icon: CalendarClock, prompt: "What deadlines are mentioned in our documents?" },
+  { icon: BadgeCheck, prompt: "Which documents mention approvals, and what do they require?" },
 ]
 
 function SourcesPanel({
@@ -64,8 +72,10 @@ function SourcesPanel({
 function Welcome({ onPick }: { onPick: (prompt: string) => void }) {
   return (
     <div className="flex flex-col items-center px-2 pt-10 text-center sm:pt-16">
-      <span className="mb-4 flex size-12 items-center justify-center rounded-2xl border border-primary/15 bg-accent text-accent-foreground shadow-xs">
-        <Sparkles className="size-5" aria-hidden />
+      <span className="relative mb-4">
+        <span className="flex size-12 items-center justify-center rounded-2xl border border-primary/15 bg-accent text-accent-foreground shadow-xs">
+          <Sparkles className="size-5" aria-hidden />
+        </span>
       </span>
       <h2 className="text-xl font-semibold tracking-tight">Ask about your documents</h2>
       <p className="mt-2 max-w-md text-sm text-muted-foreground">
@@ -73,13 +83,17 @@ function Welcome({ onPick }: { onPick: (prompt: string) => void }) {
         passage it came from.
       </p>
       <ul className="mt-6 grid w-full max-w-xl grid-cols-1 gap-2 sm:grid-cols-3">
-        {STARTERS.map((prompt) => (
+        {STARTERS.map(({ icon: Icon, prompt }) => (
           <li key={prompt}>
             <button
               type="button"
               onClick={() => onPick(prompt)}
-              className="h-full w-full rounded-xl border bg-card p-3 text-left text-sm text-muted-foreground shadow-xs transition-colors outline-none hover:border-primary/40 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+              className="group h-full w-full rounded-xl border bg-card p-3 text-left text-sm text-muted-foreground shadow-xs transition-all outline-none hover:-translate-y-0.5 hover:border-primary/40 hover:text-foreground hover:shadow-md focus-visible:ring-3 focus-visible:ring-ring/50"
             >
+              <Icon
+                className="mb-2 size-4 text-primary/70 transition-colors group-hover:text-primary"
+                aria-hidden
+              />
               {prompt}
             </button>
           </li>
