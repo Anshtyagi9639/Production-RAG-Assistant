@@ -94,6 +94,9 @@ class Conversation(Record):
     workspace_id: uuid.UUID
     user_id: uuid.UUID
     title: str
+    # The documents every answer in this conversation is limited to, fixed when it starts:
+    # [{"document_id": UUID, "filename": str}]. None searches the whole workspace.
+    scope: list[dict[str, Any]] | None = None
 
 
 @dataclass(kw_only=True)

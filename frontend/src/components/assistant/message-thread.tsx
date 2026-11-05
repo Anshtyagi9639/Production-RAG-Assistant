@@ -46,17 +46,27 @@ export function ThinkingDots() {
   )
 }
 
-function InsufficientContext({ canUpload }: { canUpload: boolean }) {
+function InsufficientContext({
+  canUpload,
+  scopeLabel,
+}: {
+  canUpload: boolean
+  scopeLabel?: string
+}) {
   return (
     <div className="rounded-xl border border-info/20 bg-info/[0.04] p-4">
       <div className="flex items-start gap-3">
         <Info className="mt-0.5 size-4 shrink-0 text-info" aria-hidden />
         <div className="space-y-2">
-          <p className="text-sm font-medium">Not enough information in your knowledge base</p>
+          <p className="text-sm font-medium">
+            {scopeLabel
+              ? `Not enough information in ${scopeLabel}`
+              : "Not enough information in your knowledge base"}
+          </p>
           <p className="text-sm text-muted-foreground">
-            No passage in this workspace was relevant enough to answer, so no answer was generated.
-            Nothing was made up. Try rephrasing the question, or add a document that covers this
-            topic.
+            {scopeLabel
+              ? `This conversation only searches ${scopeLabel}, and no passage in it was relevant enough to answer, so no answer was generated. Nothing was made up. Start a new conversation to search all documents.`
+              : "No passage in this workspace was relevant enough to answer, so no answer was generated. Nothing was made up. Try rephrasing the question, or add a document that covers this topic."}
           </p>
           <Button asChild variant="outline" size="sm">
             <Link href="/knowledge">
@@ -151,11 +161,13 @@ function AssistantMessage({
   citation,
   onCite,
   canUpload,
+  scopeLabel,
 }: {
   message: ChatMessage
   citation: Citation | null
   onCite: (citation: Citation) => void
   canUpload: boolean
+  scopeLabel?: string
 }) {
   const selected = citation?.messageId === message.id
   return (
@@ -163,7 +175,7 @@ function AssistantMessage({
       <AssistantAvatar className="mt-0.5" />
       <div className="min-w-0 flex-1 space-y-3">
         {message.insufficient_context ? (
-          <InsufficientContext canUpload={canUpload} />
+          <InsufficientContext canUpload={canUpload} scopeLabel={scopeLabel} />
         ) : (
           <>
             <CitationText
@@ -226,12 +238,15 @@ export function MessageThread({
   citation,
   onCite,
   canUpload,
+  scopeLabel,
 }: {
   messages: ChatMessage[]
   pendingQuestion: string | null
   citation: Citation | null
   onCite: (citation: Citation) => void
   canUpload: boolean
+  /** The documents a scoped conversation searches, for messages that mention its scope. */
+  scopeLabel?: string
 }) {
   const endRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -250,6 +265,7 @@ export function MessageThread({
             citation={citation}
             onCite={onCite}
             canUpload={canUpload}
+            scopeLabel={scopeLabel}
           />
         ),
       )}

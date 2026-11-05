@@ -199,7 +199,7 @@ Any node error → error node → status FAILED → END
 | GET | /api/documents/{id}/passages | indexed passages in reading order (paginated); citations deep-link here |
 | POST | /api/documents/{id}/reprocess | owner only; FAILED → UPLOADED and re-queued (409 otherwise) |
 | POST | /api/search | ranked chunks + snippet + score |
-| POST | /api/chat | create/continue conversation, answer + sources |
+| POST | /api/chat | create/continue conversation, answer + sources; optional `document_ids` when starting one limits every answer in it to those documents (stored as the conversation's `scope`; 400 `scope_is_fixed` on a follow-up, 404/409 for foreign or unprocessed documents) |
 | GET | /api/conversations, /api/conversations/{id} | paginated |
 | PATCH/DELETE | /api/conversations/{id} | rename / delete your own conversation (messages removed with it) |
 | POST | /api/agent/run | |

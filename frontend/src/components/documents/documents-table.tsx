@@ -1,7 +1,7 @@
 "use client"
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
-import { FileText } from "lucide-react"
+import { FileText, MessageSquareText } from "lucide-react"
 import Link from "next/link"
 import { useState } from "react"
 
@@ -9,6 +9,8 @@ import { DeleteDocumentDialog } from "@/components/documents/delete-document-dia
 import { FileTypeIcon } from "@/components/documents/file-type-icon"
 import { isInProgress, STATUS_LABELS, StatusBadge } from "@/components/documents/status-badge"
 import { Pagination } from "@/components/pagination"
+import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { EmptyState, ErrorState, ListSkeleton } from "@/components/states"
 import {
   Select,
@@ -198,11 +200,9 @@ export function DocumentsTable({
                   <TableHead className="hidden sm:table-cell">Status</TableHead>
                   <TableHead className="hidden md:table-cell">Passages</TableHead>
                   <TableHead className="hidden lg:table-cell">Uploaded</TableHead>
-                  {canDelete && (
-                    <TableHead className="w-12 pr-4">
-                      <span className="sr-only">Actions</span>
-                    </TableHead>
-                  )}
+                  <TableHead className="w-24 pr-4">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -255,11 +255,26 @@ export function DocumentsTable({
                         {document.uploaded_by_name ?? "Former member"}
                       </span>
                     </TableCell>
-                    {canDelete && (
-                      <TableCell className="pr-4 text-right">
+                    <TableCell className="pr-4 text-right whitespace-nowrap">
+                      {document.status === "COMPLETED" && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button asChild variant="ghost" size="icon-sm">
+                              <Link
+                                href={`/assistant?document=${document.id}`}
+                                aria-label={`Ask about ${document.filename}`}
+                              >
+                                <MessageSquareText aria-hidden />
+                              </Link>
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Ask about this document</TooltipContent>
+                        </Tooltip>
+                      )}
+                      {canDelete && (
                         <DeleteDocumentDialog workspaceId={workspaceId} document={document} />
-                      </TableCell>
-                    )}
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

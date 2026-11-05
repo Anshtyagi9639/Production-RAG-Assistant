@@ -22,9 +22,22 @@ class SourceOut(BaseModel):
     snippet: str
 
 
+MAX_SCOPE_DOCUMENTS = 20
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=MAX_MESSAGE_LENGTH)
     conversation_id: uuid.UUID | None = None
+    # Only when starting a conversation: limit its answers to these documents. A follow-up
+    # keeps the scope its conversation started with, so this must be omitted then.
+    document_ids: list[uuid.UUID] | None = Field(
+        default=None, min_length=1, max_length=MAX_SCOPE_DOCUMENTS
+    )
+
+
+class ScopeDocument(BaseModel):
+    document_id: uuid.UUID
+    filename: str
 
 
 class ChatMessageOut(BaseModel):
@@ -67,6 +80,8 @@ class RenameConversationRequest(BaseModel):
 class ConversationSummary(BaseModel):
     id: uuid.UUID
     title: str
+    # The documents answers are limited to; null means the whole workspace.
+    scope: list[ScopeDocument] | None
     created_at: datetime
     updated_at: datetime
 
@@ -75,6 +90,9 @@ class ConversationSummary(BaseModel):
         return cls(
             id=conversation.id,
             title=conversation.title,
+            scope=None
+            if conversation.scope is None
+            else [ScopeDocument.model_validate(item) for item in conversation.scope],
             created_at=conversation.created_at,
             updated_at=conversation.updated_at,
         )

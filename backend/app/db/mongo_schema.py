@@ -139,7 +139,21 @@ COLLECTIONS: tuple[CollectionSpec, ...] = (
     CollectionSpec(
         "conversations",
         ("workspace_id", "user_id", "title"),
-        {"workspace_id": _UUID, "user_id": _UUID, "title": _STRING},
+        {
+            "workspace_id": _UUID,
+            "user_id": _UUID,
+            "title": _STRING,
+            "scope": _nullable(
+                {
+                    "bsonType": "array",
+                    "items": {
+                        "bsonType": "object",
+                        "required": ["document_id", "filename"],
+                        "properties": {"document_id": _UUID, "filename": _STRING},
+                    },
+                }
+            ),
+        },
         (
             # A user's conversations in a workspace, most recently active first.
             IndexModel(

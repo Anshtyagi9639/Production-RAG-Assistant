@@ -18,7 +18,7 @@ from app.core.errors import AppError
 from app.core.pagination import Page, PageParams
 from app.db.mongo import Mongo, Session
 from app.models import Conversation, Message, User
-from app.models.enums import MessageRole
+from app.models.enums import DocumentStatus, MessageRole
 from app.models.records import utcnow
 from app.rag.chain import (
     INSUFFICIENT_ANSWER,
@@ -30,6 +30,7 @@ from app.rag.chain import (
 from app.rag.indexing import VectorIndexError
 from app.repositories.activity import ActivityRepository
 from app.repositories.conversations import ConversationRepository
+from app.repositories.documents import DocumentRepository
 from app.schemas.chat import (
     ChatMessageOut,
     ChatRequest,
@@ -62,10 +63,13 @@ async def complete_or_raise(
 
 
 async def retrieve_or_raise(
-    retriever: KnowledgeRetriever, workspace_id: uuid.UUID, query: str
+    retriever: KnowledgeRetriever,
+    workspace_id: uuid.UUID,
+    query: str,
+    document_ids: list[uuid.UUID] | None = None,
 ) -> list[RetrievedChunk]:
     try:
-        return await retriever.search(workspace_id, query)
+        return await retriever.search(workspace_id, query, document_ids=document_ids)
     except (EmbeddingError, EmbeddingNotConfiguredError) as exc:
         raise AppError(503, "embeddings_unavailable", str(exc)) from exc
     except VectorIndexError as exc:
@@ -81,13 +85,41 @@ class ChatService:
         self._llm = llm
         self._settings = settings
         self._conversations = ConversationRepository(mongo.db)
+        self._documents = DocumentRepository(mongo.db)
         self._activity = ActivityRepository(mongo.db)
+
+    async def _scope(
+        self, workspace_id: uuid.UUID, document_ids: list[uuid.UUID]
+    ) -> list[dict[str, object]]:
+        """The scope stored on a new conversation: each document must be in this workspace
+        (404 otherwise, as for any foreign id) and processed, or nothing could be found in it."""
+        scope: list[dict[str, object]] = []
+        for document_id in dict.fromkeys(document_ids):
+            row = await self._documents.get(workspace_id, document_id)
+            if row is None:
+                raise AppError(404, "document_not_found", "Document not found.")
+            document = row[0]
+            if document.status != DocumentStatus.COMPLETED:
+                raise AppError(
+                    409,
+                    "document_not_ready",
+                    f"{document.filename} hasn't finished processing, so it can't be searched yet.",
+                )
+            scope.append({"document_id": document.id, "filename": document.filename})
+        return scope
 
     async def send(self, user: User, workspace_id: uuid.UUID, request: ChatRequest) -> ChatResponse:
         if request.conversation_id is not None:
             existing = await self._conversations.get(workspace_id, user.id, request.conversation_id)
             if existing is None:
                 raise CONVERSATION_NOT_FOUND
+            if request.document_ids is not None:
+                raise AppError(
+                    400,
+                    "scope_is_fixed",
+                    "A conversation keeps the documents it started with. Start a new "
+                    "conversation to ask about other documents.",
+                )
             conversation = existing
             history = await self._conversations.recent_messages(
                 conversation, self._settings.chat_history_messages
@@ -97,6 +129,9 @@ class ChatService:
                 workspace_id=workspace_id,
                 user_id=user.id,
                 title=conversation_title(request.message),
+                scope=None
+                if request.document_ids is None
+                else await self._scope(workspace_id, request.document_ids),
             )
             history = []
 
@@ -112,7 +147,12 @@ class ChatService:
             completion_tokens += rewrite.completion_tokens
             question = rewrite.text[:MAX_STANDALONE_QUESTION] or request.message
 
-        chunks = await retrieve_or_raise(self._retriever, workspace_id, question)
+        scoped_ids = (
+            None
+            if conversation.scope is None
+            else [uuid.UUID(str(item["document_id"])) for item in conversation.scope]
+        )
+        chunks = await retrieve_or_raise(self._retriever, workspace_id, question, scoped_ids)
         if not chunks:
             # Nothing relevant enough: the fixed answer, without calling the model.
             content, sources, insufficient = INSUFFICIENT_ANSWER, [], True

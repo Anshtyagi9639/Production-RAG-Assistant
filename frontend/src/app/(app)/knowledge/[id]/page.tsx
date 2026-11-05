@@ -7,6 +7,7 @@ import {
   CircleAlert,
   Clock,
   Loader2,
+  MessageSquareText,
   RotateCcw,
   Search,
   SearchX,
@@ -338,14 +339,24 @@ export default function DocumentPage() {
                 badge={<StatusBadge status={document.data.status} />}
                 description={`${FILE_KIND_LABELS[fileKind(document.data.filename, document.data.content_type)]} · ${formatBytes(document.data.size_bytes)} · uploaded ${formatRelative(document.data.created_at)} by ${document.data.uploaded_by_name ?? "a former member"}`}
                 actions={
-                  workspace.role === "owner" && (
-                    <DeleteDocumentDialog
-                      workspaceId={workspace.id}
-                      document={document.data}
-                      showLabel
-                      onDeleted={() => router.push("/knowledge")}
-                    />
-                  )
+                  <>
+                    {document.data.status === "COMPLETED" && (
+                      <Button asChild>
+                        <Link href={`/assistant?document=${document.data.id}`}>
+                          <MessageSquareText aria-hidden />
+                          Ask about this document
+                        </Link>
+                      </Button>
+                    )}
+                    {workspace.role === "owner" && (
+                      <DeleteDocumentDialog
+                        workspaceId={workspace.id}
+                        document={document.data}
+                        showLabel
+                        onDeleted={() => router.push("/knowledge")}
+                      />
+                    )}
+                  </>
                 }
               />
             </div>

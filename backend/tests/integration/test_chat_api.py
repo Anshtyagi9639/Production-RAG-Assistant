@@ -216,6 +216,87 @@ async def test_conversations_are_private_to_their_owner_and_workspace(api: Api) 
     )
 
 
+SHIPPING = b"Refunds for shipping fees are never given. Shipping takes 5 days."
+
+
+async def test_a_conversation_scoped_to_one_document_only_answers_from_it(
+    api: Api, mongo: Mongo
+) -> None:
+    account = await register(api.client, "scope@example.com", "Sam")
+    await upload(api, account, "refunds.md", REFUNDS)
+    shipping = await upload(api, account, "shipping.md", SHIPPING)
+    await run_queued_jobs(api)
+    api.llm.reply = "Shipping fees are not refunded [1]."
+
+    # Unscoped, both documents mention refunds and both are retrieved.
+    unscoped = await ask(api, account, "Are refunds given?")
+    assert {s["filename"] for s in unscoped["message"]["sources"]} <= {"refunds.md", "shipping.md"}  # type: ignore[index]
+    assert '<source index="2"' in answer_calls(api.llm)[-1][1].content
+
+    response = await api.client.post(
+        "/api/chat",
+        json={"message": "Are refunds given?", "document_ids": [shipping["id"]]},
+        headers=account.headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # Only the shipping document reached the model, so only it can be cited.
+    sent = answer_calls(api.llm)[-1][1].content
+    assert 'filename="shipping.md"' in sent
+    assert "refunds.md" not in sent
+    assert [s["filename"] for s in body["message"]["sources"]] == ["shipping.md"]
+    conversation_id = body["conversation_id"]
+    stored = await mongo.db["conversations"].find_one({"_id": uuid.UUID(conversation_id)})
+    assert stored is not None
+    assert stored["scope"] == [
+        {"document_id": uuid.UUID(shipping["id"]), "filename": "shipping.md"}
+    ]
+    detail = await api.client.get(
+        f"/api/conversations/{conversation_id}", headers=account.headers()
+    )
+    assert detail.json()["scope"] == [{"document_id": shipping["id"], "filename": "shipping.md"}]
+
+    # A follow-up keeps the scope without resending it...
+    api.llm.reply = "Shipping takes 5 days [1]."
+    follow_up = await ask(api, account, "And how long does it take?", conversation_id)
+    assert "refunds.md" not in answer_calls(api.llm)[-1][1].content
+    assert [s["filename"] for s in follow_up["message"]["sources"]] == ["shipping.md"]  # type: ignore[index]
+    # ...and can't change it.
+    changed = await api.client.post(
+        "/api/chat",
+        json={"message": "x", "conversation_id": conversation_id, "document_ids": [shipping["id"]]},
+        headers=account.headers(),
+    )
+    assert (changed.status_code, changed.json()["error"]["code"]) == (400, "scope_is_fixed")
+
+
+async def test_scope_rejects_foreign_and_unprocessed_documents(api: Api) -> None:
+    alice = await with_refunds_doc(api, "scope-a@example.com")
+    bob = await register(api.client, "scope-b@example.com")
+    bobs_document = await upload(api, bob, "bob.md", b"bob only")  # left UPLOADED
+    alices = (await api.client.get("/api/documents", headers=alice.headers())).json()["items"]
+
+    foreign = await api.client.post(
+        "/api/chat",
+        json={"message": "hi", "document_ids": [alices[0]["id"]]},
+        headers=bob.headers(),
+    )
+    not_ready = await api.client.post(
+        "/api/chat",
+        json={"message": "hi", "document_ids": [bobs_document["id"]]},
+        headers=bob.headers(),
+    )
+
+    assert (foreign.status_code, foreign.json()["error"]["code"]) == (404, "document_not_found")
+    assert (not_ready.status_code, not_ready.json()["error"]["code"]) == (
+        409,
+        "document_not_ready",
+    )
+    listed = await api.client.get("/api/conversations", headers=bob.headers())
+    assert listed.json()["items"] == []
+
+
 async def test_owner_can_rename_and_delete_a_conversation_but_others_cannot(
     api: Api, mongo: Mongo
 ) -> None:

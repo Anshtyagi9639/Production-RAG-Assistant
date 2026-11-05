@@ -16,6 +16,7 @@ import { Suspense, useState } from "react"
 import { useWorkspace } from "@/components/app/workspace-context"
 import { Composer } from "@/components/assistant/composer"
 import { ConversationList } from "@/components/assistant/conversation-list"
+import { ScopePicker } from "@/components/assistant/scope-picker"
 import { type Citation, MessageThread } from "@/components/assistant/message-thread"
 import { FormError } from "@/components/auth/form-error"
 import { SourcesList } from "@/components/citations/sources-list"
@@ -29,8 +30,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
-import { chatApi } from "@/lib/api/endpoints"
-import type { ChatMessage } from "@/lib/api/types"
+import { chatApi, documentsApi } from "@/lib/api/endpoints"
+import type { ChatMessage, ScopeDocument } from "@/lib/api/types"
 import { queryKeys } from "@/lib/query-keys"
 
 // Prompts that work against any knowledge base; selecting one only fills the composer.
@@ -69,7 +70,13 @@ function SourcesPanel({
   )
 }
 
-function Welcome({ onPick }: { onPick: (prompt: string) => void }) {
+function Welcome({
+  onPick,
+  scopeLabel,
+}: {
+  onPick: (prompt: string) => void
+  scopeLabel?: string
+}) {
   return (
     <div className="flex flex-col items-center px-2 pt-10 text-center sm:pt-16">
       <span className="relative mb-4">
@@ -77,10 +84,13 @@ function Welcome({ onPick }: { onPick: (prompt: string) => void }) {
           <Sparkles className="size-5" aria-hidden />
         </span>
       </span>
-      <h2 className="text-xl font-semibold tracking-tight">Ask about your documents</h2>
+      <h2 className="text-xl font-semibold tracking-tight break-words">
+        {scopeLabel ? `Ask about ${scopeLabel}` : "Ask about your documents"}
+      </h2>
       <p className="mt-2 max-w-md text-sm text-muted-foreground">
-        Answers are written only from this workspace&apos;s documents, and every claim links to the
-        passage it came from.
+        {scopeLabel
+          ? "Answers are written only from this document, and every claim links to the passage it came from."
+          : "Answers are written only from this workspace's documents, and every claim links to the passage it came from."}
       </p>
       <ul className="mt-6 grid w-full max-w-xl grid-cols-1 gap-2 sm:grid-cols-3">
         {STARTERS.map(({ icon: Icon, prompt }) => (
@@ -107,7 +117,10 @@ function Assistant() {
   const { workspace } = useWorkspace()
   const router = useRouter()
   const queryClient = useQueryClient()
-  const conversationId = useSearchParams().get("c")
+  const searchParams = useSearchParams()
+  const conversationId = searchParams.get("c")
+  // ?document=<id> (from a document's "Ask about this document") pre-selects that document.
+  const documentParam = conversationId ? null : searchParams.get("document")
   const [draft, setDraft] = useState("")
   const [citation, setCitation] = useState<Citation | null>(null)
   const [listOpen, setListOpen] = useState(false)
@@ -115,6 +128,21 @@ function Assistant() {
   // How many messages the thread had when the question was sent: once the refreshed thread
   // holds more, the answer is on screen and the pending bubble must not show it twice.
   const [sentAtCount, setSentAtCount] = useState(0)
+
+  const linkedDocument = useQuery({
+    queryKey: queryKeys.document(workspace.id, documentParam ?? ""),
+    queryFn: () => documentsApi.get(workspace.id, documentParam ?? ""),
+    enabled: documentParam !== null,
+  })
+  // The scope chosen for a new conversation. A choice applies only to the view it was made
+  // in (keyed), so "New conversation" or another document link starts from its own default.
+  const scopeKey = conversationId ?? `new:${documentParam ?? ""}`
+  const [scopeChoice, setScopeChoice] = useState<{ key: string; value: ScopeDocument | null }>()
+  const linkedScope: ScopeDocument | null =
+    linkedDocument.data?.status === "COMPLETED"
+      ? { document_id: linkedDocument.data.id, filename: linkedDocument.data.filename }
+      : null
+  const scope = scopeChoice?.key === scopeKey ? scopeChoice.value : linkedScope
 
   const conversation = useQuery({
     queryKey: queryKeys.conversation(workspace.id, conversationId ?? ""),
@@ -124,7 +152,12 @@ function Assistant() {
 
   const send = useMutation({
     mutationFn: (message: string) =>
-      chatApi.send(workspace.id, { message, conversation_id: conversationId ?? undefined }),
+      chatApi.send(workspace.id, {
+        message,
+        conversation_id: conversationId ?? undefined,
+        // Fixed when the conversation starts; follow-ups keep it on the server.
+        document_ids: !conversationId && scope ? [scope.document_id] : undefined,
+      }),
     onMutate: () => setDraft(""),
     onError: (_error, message) => setDraft(message),
     onSuccess: async (response) => {
@@ -150,6 +183,11 @@ function Assistant() {
   const lastWithSources = messages.findLast((m) => m.role === "assistant" && m.sources.length > 0)
   const selectedMessage = messages.find((m) => m.id === citation?.messageId) ?? lastWithSources
   const sourceCount = selectedMessage?.sources.length ?? 0
+
+  const activeScope = conversationId ? conversation.data?.scope : scope ? [scope] : null
+  const scopeLabel = activeScope?.length
+    ? activeScope.map((item) => item.filename).join(", ")
+    : undefined
 
   const cite = (next: Citation) => {
     setCitation(next)
@@ -181,7 +219,9 @@ function Assistant() {
               {conversationId ? (conversation.data?.title ?? "Conversation") : "New conversation"}
             </h1>
             <p className="truncate text-xs text-muted-foreground">
-              Answers use only {workspace.name}&apos;s documents and cite their sources.
+              {activeScope?.length
+                ? `Answers use only ${activeScope.map((item) => item.filename).join(", ")} and cite their sources.`
+                : `Answers use only ${workspace.name}'s documents and cite their sources.`}
             </p>
           </div>
           {sourceCount > 0 && (
@@ -217,9 +257,12 @@ function Assistant() {
                 onRetry={() => conversation.refetch()}
               />
             )}
-            {!conversationId && !send.isPending && <Welcome onPick={setDraft} />}
+            {!conversationId && !send.isPending && (
+              <Welcome onPick={setDraft} scopeLabel={scopeLabel} />
+            )}
             {(messages.length > 0 || send.isPending) && (
               <MessageThread
+                scopeLabel={scopeLabel}
                 messages={messages}
                 pendingQuestion={pendingQuestion}
                 citation={citation}
@@ -233,6 +276,14 @@ function Assistant() {
         <div className="border-t bg-background/80 px-4 pt-3 pb-4 backdrop-blur sm:px-6">
           <div className="mx-auto w-full max-w-3xl space-y-2">
             <FormError error={send.error} />
+            {(!conversationId || conversation.data) && (
+              <ScopePicker
+                workspaceId={workspace.id}
+                selected={scope}
+                onSelect={(value) => setScopeChoice({ key: scopeKey, value })}
+                locked={conversationId ? (conversation.data?.scope ?? null) : undefined}
+              />
+            )}
             <Composer
               value={draft}
               onChange={setDraft}

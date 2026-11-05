@@ -131,6 +131,14 @@ export interface ChatMessage {
 export interface ChatRequest {
   message: string
   conversation_id?: string
+  /** Only when starting a conversation: limit its answers to these documents. */
+  document_ids?: string[]
+}
+
+/** A document a conversation's answers are limited to. */
+export interface ScopeDocument {
+  document_id: string
+  filename: string
 }
 
 export interface ChatResponse {
@@ -141,6 +149,8 @@ export interface ChatResponse {
 export interface ConversationSummary {
   id: string
   title: string
+  /** The documents answers are limited to; null searches the whole workspace. */
+  scope: ScopeDocument[] | null
   created_at: string
   updated_at: string
 }

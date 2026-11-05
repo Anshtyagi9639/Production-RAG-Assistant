@@ -1,7 +1,7 @@
 "use client"
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
-import { MessagesSquare, SquarePen } from "lucide-react"
+import { FileText, MessagesSquare, SquarePen } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
@@ -94,11 +94,20 @@ export function ConversationList({
                       <span className="block truncate text-sm font-medium">
                         {conversation.title}
                       </span>
-                      <span
-                        className="block text-xs text-muted-foreground"
-                        title={formatDateTime(conversation.updated_at)}
-                      >
-                        {formatRelative(conversation.updated_at)}
+                      <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                        <span className="shrink-0" title={formatDateTime(conversation.updated_at)}>
+                          {formatRelative(conversation.updated_at)}
+                        </span>
+                        {conversation.scope && (
+                          <>
+                            <span aria-hidden>·</span>
+                            <FileText className="size-3 shrink-0" aria-hidden />
+                            <span className="truncate">
+                              <span className="sr-only">Only </span>
+                              {conversation.scope.map((item) => item.filename).join(", ")}
+                            </span>
+                          </>
+                        )}
                       </span>
                     </Link>
                     <div className="absolute right-1.5">
